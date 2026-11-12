@@ -32,6 +32,7 @@
       <div class="project-list" id="project-list"></div>
       <div class="sidebar-footer">
         <span id="current-user"></span>
+        <button class="account-btn" id="guide-btn" style="display:none">Skills &amp; guide</button>
         <button class="account-btn" id="usage-btn" style="display:none">My usage</button>
         <button class="account-btn" id="audit-btn" style="display:none">Usage audit</button>
         <button class="account-btn" id="account-btn" style="display:none">Manage accounts</button>
@@ -113,6 +114,14 @@
       <div id="usage-summary" class="usage-summary"></div>
       <h3 class="usage-heading">Recent activity</h3>
       <div id="usage-events" class="usage-events"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="guide-modal" hidden>
+    <div class="modal guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-modal-title">
+      <div class="modal-header"><h2 id="guide-modal-title">Skills &amp; guide</h2><button id="close-guide-modal" class="modal-close" aria-label="Close">×</button></div>
+      <p class="guide-intro">Skills are used automatically when your request matches them. You can simply describe your goal in the chat; the examples below are ready to copy and adapt.</p>
+      <div id="guide-list" class="guide-list"></div>
     </div>
   </div>
 

@@ -80,6 +80,12 @@ body {
 .audit-modal .modal-header, .audit-modal .audit-filter, .audit-modal .usage-heading { flex: 0 0 auto; }
 .audit-modal .audit-user-summary { flex: 0 1 auto; max-height: 31vh; overflow: auto; }
 .audit-modal #audit-events { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: .35rem; }
+.guide-modal { width: min(760px, calc(100vw - 2rem)); }
+.guide-intro { margin: 0 0 .85rem; color: var(--text-secondary); font-size: .86rem; line-height: 1.5; }
+.guide-list { display: flex; flex-direction: column; gap: .65rem; }
+.guide-card { border: 1px solid var(--border-color); border-radius: .55rem; padding: .75rem; background: var(--bg-tertiary); }
+.guide-card-header { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }.guide-card h3 { margin: 0; color: var(--accent); font-size: .95rem; }.guide-category { color: var(--text-secondary); font-size: .72rem; white-space: nowrap; }
+.guide-card p { margin: .45rem 0 0; font-size: .84rem; line-height: 1.45; }.guide-how { color: var(--text-secondary); }.guide-how strong { color: var(--text-primary); }
 
 header {
   display: flex;

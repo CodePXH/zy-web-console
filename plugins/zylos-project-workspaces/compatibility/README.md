@@ -6,7 +6,9 @@ This plugin owns all locally developed Zylos console behavior:
 - project and conversation isolation in the Web Console and C4 dispatcher;
 - configured-model display, attachment preview fallback, persistent thinking state,
   per-conversation unsent message drafts, personal usage monitoring, and
-  administrator-only user usage auditing.
+  administrator-only user usage auditing;
+- an all-user Skills & guide page that lists currently installed capabilities,
+  explains their use, and hides administrator-only operations from regular users.
 
 Usage auditing records only operation metadata (event type, timestamp, resource
 IDs, attachment size/kind, and message/attachment counts). It never stores a

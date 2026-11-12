@@ -1184,6 +1184,39 @@ function setupUsageMonitoring(basePath, user) {
   document.getElementById('close-usage-modal').addEventListener('click', () => { modal.hidden = true; });
 }
 
+function setupSkillsGuide(basePath, user) {
+  if (!user) return;
+  const button = document.getElementById('guide-btn');
+  const modal = document.getElementById('guide-modal');
+  const list = document.getElementById('guide-list');
+  if (!button || !modal || !list) return;
+  button.style.display = '';
+  const loadGuide = async () => {
+    const response = await fetch(`${basePath}/api/capabilities`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load skills');
+    list.textContent = '';
+    data.capabilities.forEach((capability) => {
+      const card = document.createElement('article'); card.className = 'guide-card';
+      const header = document.createElement('div'); header.className = 'guide-card-header';
+      const title = document.createElement('h3'); title.textContent = capability.title;
+      const category = document.createElement('span'); category.className = 'guide-category';
+      category.textContent = capability.connectionRequired ? `${capability.category} · connect first` : capability.category;
+      header.append(title, category);
+      const description = document.createElement('p'); description.textContent = capability.description;
+      const how = document.createElement('p'); how.className = 'guide-how';
+      const prefix = document.createElement('strong'); prefix.textContent = 'How to use: ';
+      how.append(prefix, document.createTextNode(capability.how));
+      card.append(header, description, how); list.appendChild(card);
+    });
+  };
+  button.addEventListener('click', async () => {
+    modal.hidden = false;
+    try { await loadGuide(); } catch (err) { list.textContent = ''; const message = document.createElement('p'); message.className = 'usage-empty'; message.textContent = err.message; list.appendChild(message); }
+  });
+  document.getElementById('close-guide-modal').addEventListener('click', () => { modal.hidden = true; });
+}
+
 function setupUsageAudit(basePath, user) {
   if (user?.role !== 'admin') return;
   const button = document.getElementById('audit-btn');
@@ -1272,6 +1305,7 @@ async function checkAuth() {
       // No password set, or already authenticated
       chatScreen.style.display = '';
       showLogoutButton(basePath, auth.user);
+      setupSkillsGuide(basePath, auth.user);
       setupUsageMonitoring(basePath, auth.user);
       setupUsageAudit(basePath, auth.user);
       setupAccountManagement(basePath, auth.user);
@@ -1301,6 +1335,7 @@ async function checkAuth() {
         loginScreen.style.display = 'none';
         chatScreen.style.display = '';
         showLogoutButton(basePath, result.user);
+        setupSkillsGuide(basePath, result.user);
         setupUsageMonitoring(basePath, result.user);
         setupUsageAudit(basePath, result.user);
         setupAccountManagement(basePath, result.user);

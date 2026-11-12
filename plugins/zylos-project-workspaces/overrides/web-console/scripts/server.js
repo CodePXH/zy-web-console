@@ -55,6 +55,76 @@ const MAX_UPLOAD_MB = Number.parseInt(process.env.WEB_CONSOLE_MAX_UPLOAD_MB || '
 const MAX_UPLOAD_BYTES = Math.max(1, MAX_UPLOAD_MB) * 1024 * 1024;
 const C4_SCRIPT_DIR = path.join(SKILLS_DIR, 'comm-bridge', 'scripts');
 
+const USER_CAPABILITIES = [
+  {
+    id: 'projects', title: '项目工作区', category: 'Zylos',
+    description: '每个项目有独立工作目录和会话；切换会话时未发送草稿会自动保留。',
+    how: '使用左侧 + New project 创建项目，再在项目下创建会话即可。'
+  },
+  {
+    id: 'attachments', title: '文件与图片附件', category: 'Zylos',
+    description: '上传图片或文件后与当前会话绑定，可让助手分析、总结或基于资料完成工作。',
+    how: '点击输入框左侧 Attach，上传后直接说明希望助手如何处理。'
+  },
+  {
+    id: 'cangjie', title: '仓颉语言开发', category: '专业技能', skillPath: path.join(os.homedir(), '.codex', 'skills', 'cangjie-lang-skill', 'SKILL.md'),
+    description: '生成、分析、审查和调试仓颉语言代码，并覆盖常见语法陷阱。',
+    how: '直接提问：帮我用仓颉实现一个带单元测试的 LRU 缓存。'
+  },
+  {
+    id: 'document-style', title: '文档风格复刻与技能包', category: '专业技能', skillPath: path.join(os.homedir(), '.codex', 'skills', 'style-distiller', 'SKILL.md'),
+    description: '从你上传的参考文档中提取结构、语气和写作技巧，生成可复用的风格技能包。',
+    how: '上传 2–5 份参考文档后说：根据这些文档生成一个写作风格技能，并用它写一份新需求文档。'
+  },
+  {
+    id: 'writing-style-builder', title: '写作风格构建与审计', category: '专业技能', skillPath: path.join(os.homedir(), '.codex', 'skills', 'style-skill-builder', 'SKILL.md'),
+    description: '将文章、品牌规范或访谈材料转为中性的写作规范，也可审查现有风格指南。',
+    how: '直接提问：分析这些样稿，提炼可执行的品牌写作规范，并指出缺失的约束。'
+  },
+  {
+    id: 'personal-style', title: '个人写作风格学习', category: '专业技能', skillPath: path.join(os.homedir(), '.codex', 'skills', 'docwriter-style-generator', 'SKILL.md'),
+    description: '分析个人文章的用词、句式和段落习惯，生成可持续更新的个人风格能力。',
+    how: '上传自己的文章后说：学习我的写作风格，之后用这个风格帮我写周报。'
+  },
+  {
+    id: 'imagegen', title: '图片生成与编辑', category: '创作', skillPath: path.join(os.homedir(), '.codex', 'skills', '.system', 'imagegen', 'SKILL.md'),
+    description: '根据文字生成图片，或基于上传图片进行修改、扩图和风格转换。',
+    how: '直接提问：生成一张深色科技风的产品封面图；或上传图片后说明要修改的部分。'
+  },
+  {
+    id: 'scheduler', title: '定时任务', category: 'Zylos', skillPath: path.join(SKILLS_DIR, 'scheduler', 'SKILL.md'),
+    description: '创建一次性、定期或 Cron 定时任务，在指定时间执行后续工作。',
+    how: '直接提问：每周一上午 9 点提醒我整理本周项目进度。'
+  },
+  {
+    id: 'github', title: 'GitHub 集成', category: '已安装集成',
+    description: '已安装 GitHub 插件；连接授权后可基于你的 GitHub 权限处理仓库、Issue 和代码协作。',
+    how: '先完成 GitHub 授权，然后说明：查看这个仓库的未解决 Issue 并给出优先级建议。',
+    connectionRequired: true
+  },
+  {
+    id: 'gmail', title: 'Gmail 集成', category: '已安装集成',
+    description: '已安装 Gmail 插件；连接授权后可基于你的 Gmail 权限检索和处理邮件。',
+    how: '先完成 Gmail 授权，然后说明：汇总我今天未读邮件中的待办事项。',
+    connectionRequired: true
+  },
+  {
+    id: 'usage', title: '个人使用监控', category: 'Zylos',
+    description: '查看自己项目、会话、消息、附件和近期活动的使用情况。',
+    how: '点击左侧 My usage。仅展示当前登录用户自己的数据。'
+  },
+  {
+    id: 'admin-audit', title: '用户使用审计', category: '管理员', adminOnly: true,
+    description: '查看全体用户汇总、最后活动时间和操作元数据审计记录。',
+    how: '管理员登录后点击左侧 Usage audit。不会显示消息正文或凭据。'
+  },
+  {
+    id: 'account-management', title: '账号管理', category: '管理员', adminOnly: true,
+    description: '创建普通用户或管理员账号，并停用普通用户账号。',
+    how: '管理员登录后点击左侧 Manage accounts。'
+  }
+];
+
 // Paths - __dirname is scripts/, public/ is one level up
 const SKILL_ROOT = path.join(__dirname, '..');
 
@@ -779,6 +849,15 @@ app.post('/api/send', (req, res) => {
 app.get('/api/me', (req, res) => {
   const identity = getIdentity(req);
   res.json({ user: identity.user });
+});
+
+app.get('/api/capabilities', (req, res) => {
+  const identity = getIdentity(req);
+  const capabilities = USER_CAPABILITIES
+    .filter((capability) => !capability.adminOnly || identity.user.role === 'admin')
+    .filter((capability) => !capability.skillPath || fs.existsSync(capability.skillPath))
+    .map(({ skillPath: _skillPath, adminOnly: _adminOnly, ...capability }) => capability);
+  res.json({ capabilities });
 });
 
 app.get('/api/usage/me', (req, res) => {

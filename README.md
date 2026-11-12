@@ -13,6 +13,9 @@ administrator-only user usage audit page; audit records contain operation
 metadata only, never message bodies, attachment filenames, passwords, sessions,
 or credentials.
 
+All signed-in users can open **Skills & guide** in the console sidebar to see
+the installed user-facing capabilities and ready-to-adapt prompt examples.
+
 ## Install on another machine
 
 Prerequisites: Git, Node.js, Codex CLI, Zylos, and the `web-console` and
