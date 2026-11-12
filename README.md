@@ -3,6 +3,8 @@
 An upgrade-safe local plugin for Zylos Web Console customizations and isolated
 project workspaces.
 
+中文说明请见 [README.zh-CN.md](README.zh-CN.md)。
+
 It provides project-scoped workspaces and Codex runner sessions, scoped
 conversations and attachments, model information in the console header,
 attachment rendering fallback, persistent thinking indicators, and unsent
