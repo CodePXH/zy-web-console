@@ -65,6 +65,17 @@ body {
 .modal { width: min(560px, calc(100vw - 2rem)); max-height: 80vh; overflow: auto; border: 1px solid var(--border-color); border-radius: 0.8rem; padding: 1rem; background: var(--bg-secondary); }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }.modal-header h2 { font-size: 1.1rem; color: var(--accent); }.modal-close { border: 0; background: transparent; color: var(--text-primary); font-size: 1.5rem; cursor: pointer; }
 .create-user-form { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: .5rem; }.create-user-form input, .create-user-form select { min-width: 0; padding: .55rem; border: 1px solid var(--border-color); border-radius: .4rem; color: var(--text-primary); background: var(--bg-tertiary); }.create-user-form button { padding: .55rem; border: 0; border-radius: .4rem; background: var(--accent); cursor: pointer; }.modal-error { min-height: 1.2rem; color: var(--error); font-size: .85rem; margin-top: .6rem; }.user-list { display: flex; flex-direction: column; gap: .4rem; }.user-row { display: flex; justify-content: space-between; align-items: center; padding: .6rem 0; border-top: 1px solid var(--border-color); }.user-row span { color: var(--text-secondary); font-size: .85rem; }.user-row button { color: var(--error); border: 1px solid var(--error); background: transparent; border-radius: .35rem; padding: .3rem .45rem; cursor: pointer; }
+.usage-modal, .audit-modal { width: min(780px, calc(100vw - 2rem)); }
+.usage-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; }
+.usage-card { padding: .7rem; border: 1px solid var(--border-color); border-radius: .5rem; background: var(--bg-tertiary); }
+.usage-card .usage-value { display: block; color: var(--accent); font-size: 1.15rem; font-weight: 700; }
+.usage-card .usage-label { color: var(--text-secondary); font-size: .78rem; }
+.usage-heading { margin: 1rem 0 .45rem; font-size: .9rem; color: var(--text-secondary); }
+.usage-events { display: flex; flex-direction: column; border-top: 1px solid var(--border-color); }
+.usage-event { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .6rem; align-items: center; padding: .58rem 0; border-bottom: 1px solid var(--border-color); font-size: .85rem; }
+.usage-event-label { min-width: 0; color: var(--text-primary); }.usage-event-meta { color: var(--text-secondary); font-size: .76rem; text-align: right; }.usage-empty { color: var(--text-secondary); padding: .8rem 0; font-size: .85rem; }
+.audit-filter { display: flex; align-items: center; gap: .5rem; color: var(--text-secondary); font-size: .85rem; }.audit-filter select { min-width: 160px; padding: .4rem; border: 1px solid var(--border-color); border-radius: .35rem; color: var(--text-primary); background: var(--bg-tertiary); }
+.audit-user-summary { overflow-x: auto; margin-top: .8rem; }.audit-user-summary table { width: 100%; border-collapse: collapse; font-size: .8rem; }.audit-user-summary th, .audit-user-summary td { padding: .5rem; border-bottom: 1px solid var(--border-color); text-align: left; white-space: nowrap; }.audit-user-summary th { color: var(--text-secondary); font-weight: 600; }.audit-user-summary td:last-child { color: var(--text-secondary); }
 
 header {
   display: flex;
@@ -800,4 +811,5 @@ header h1 {
 
   .attach-button { padding: 0; }
   .attach-button-label { display: none; }
+  .usage-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

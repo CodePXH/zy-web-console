@@ -50,6 +50,15 @@ function openDb(dbPath = DB_PATH) {
       created_at INTEGER NOT NULL,
       consumed INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      project_id TEXT,
+      conversation_id TEXT,
+      details_json TEXT,
+      created_at INTEGER NOT NULL
+    );
   `);
   const sessionColumns = db.prepare("PRAGMA table_info(sessions)").all().map((column) => column.name);
   if (!sessionColumns.includes('user_id')) db.exec('ALTER TABLE sessions ADD COLUMN user_id TEXT');
@@ -58,6 +67,8 @@ function openDb(dbPath = DB_PATH) {
   if (!uploadColumns.includes('user_id')) db.exec('ALTER TABLE uploads ADD COLUMN user_id TEXT');
   if (!uploadColumns.includes('conversation_id')) db.exec('ALTER TABLE uploads ADD COLUMN conversation_id TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_uploads_access ON uploads(path, user_id, conversation_id, consumed)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_usage_events_user_created ON usage_events(user_id, created_at DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at DESC)');
   return db;
 }
 
@@ -248,6 +259,67 @@ export class PersistentUploadRegistry {
   isAccessible(filePath, userId, conversationId) {
     return Boolean(this._stmts.accessible.get(filePath, userId, conversationId));
   }
+}
+
+export class UsageAuditStore {
+  constructor(db) {
+    this.db = db;
+    this._insert = db.prepare(`INSERT INTO usage_events
+      (user_id, event_type, project_id, conversation_id, details_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)`);
+  }
+
+  log({ userId, eventType, projectId = null, conversationId = null, details = null }) {
+    if (!userId || !eventType) return;
+    const safeDetails = details && typeof details === 'object' ? JSON.stringify(details) : null;
+    this._insert.run(userId, eventType, projectId || null, conversationId || null, safeDetails, Date.now());
+  }
+
+  personalUsage(userId, limit = 20) {
+    const summary = this.db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM projects WHERE owner_id = ?) AS projects,
+        (SELECT COUNT(*) FROM conversations WHERE owner_id = ?) AS conversations,
+        (SELECT COUNT(*) FROM usage_events WHERE user_id = ? AND event_type = 'message_sent') AS messages_sent,
+        (SELECT COUNT(*) FROM usage_events WHERE user_id = ? AND event_type = 'attachment_uploaded') AS attachments_uploaded
+    `).get(userId, userId, userId, userId);
+    const events = this.db.prepare(`
+      SELECT event_type, project_id, conversation_id, details_json, created_at
+      FROM usage_events WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+    `).all(userId, limit);
+    const normalizedEvents = events.map(normalizeEvent);
+    summary.uploaded_bytes = normalizedEvents
+      .filter((event) => event.event_type === 'attachment_uploaded')
+      .reduce((sum, event) => sum + (Number.isFinite(event.details?.bytes) ? event.details.bytes : 0), 0);
+    return { summary, events: normalizedEvents };
+  }
+
+  adminUsage({ userId = null, limit = 100 } = {}) {
+    const users = this.db.prepare(`
+      SELECT u.id, u.username, u.role, u.created_at,
+        (SELECT COUNT(*) FROM projects p WHERE p.owner_id = u.id) AS projects,
+        (SELECT COUNT(*) FROM conversations c WHERE c.owner_id = u.id) AS conversations,
+        (SELECT COUNT(*) FROM usage_events e WHERE e.user_id = u.id AND e.event_type = 'message_sent') AS messages_sent,
+        (SELECT COUNT(*) FROM usage_events e WHERE e.user_id = u.id AND e.event_type = 'attachment_uploaded') AS attachments_uploaded,
+        (SELECT MAX(e.created_at) FROM usage_events e WHERE e.user_id = u.id) AS last_active_at
+      FROM users u WHERE u.disabled_at IS NULL ORDER BY last_active_at DESC, u.username COLLATE NOCASE
+    `).all();
+    const events = this.db.prepare(`
+      SELECT e.event_type, e.project_id, e.conversation_id, e.details_json, e.created_at,
+        u.id AS user_id, u.username
+      FROM usage_events e JOIN users u ON u.id = e.user_id
+      WHERE (? IS NULL OR e.user_id = ?) AND u.disabled_at IS NULL
+      ORDER BY e.created_at DESC LIMIT ?
+    `).all(userId, userId, limit);
+    return { users, events: events.map(normalizeEvent) };
+  }
+}
+
+function normalizeEvent(event) {
+  let details = null;
+  try { details = event.details_json ? JSON.parse(event.details_json) : null; } catch { /* Legacy malformed details are ignored. */ }
+  const { details_json: _details, ...rest } = event;
+  return { ...rest, details };
 }
 
 export { openDb, DB_PATH, SESSION_MAX_AGE_MS, UPLOAD_TTL_MS };

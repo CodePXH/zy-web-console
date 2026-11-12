@@ -1111,6 +1111,118 @@ function showLogoutButton(basePath, user) {
   });
 }
 
+const usageEventLabels = {
+  login_success: 'Signed in',
+  project_created: 'Created a project',
+  project_deleted: 'Deleted a project',
+  conversation_created: 'Created a conversation',
+  conversation_deleted: 'Deleted a conversation',
+  message_sent: 'Sent a message',
+  attachment_uploaded: 'Uploaded an attachment'
+};
+
+function formatUsageTime(timestamp) {
+  return timestamp ? new Date(timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+}
+
+function formatUsageBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function appendUsageEvents(container, events, includeUser = false) {
+  container.textContent = '';
+  if (!events?.length) {
+    const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = 'No activity recorded yet.'; container.appendChild(empty);
+    return;
+  }
+  events.forEach((event) => {
+    const row = document.createElement('div'); row.className = 'usage-event';
+    const label = document.createElement('span'); label.className = 'usage-event-label';
+    label.textContent = `${includeUser ? `${event.username} · ` : ''}${usageEventLabels[event.event_type] || event.event_type}`;
+    const meta = document.createElement('span'); meta.className = 'usage-event-meta';
+    const suffix = event.event_type === 'attachment_uploaded' ? ` · ${formatUsageBytes(event.details?.bytes)}`
+      : event.event_type === 'message_sent' ? ` · ${event.details?.attachments || 0} attachment(s)` : '';
+    meta.textContent = `${formatUsageTime(event.created_at)}${suffix}`;
+    row.append(label, meta); container.appendChild(row);
+  });
+}
+
+function setupUsageMonitoring(basePath, user) {
+  if (!user) return;
+  const button = document.getElementById('usage-btn');
+  const modal = document.getElementById('usage-modal');
+  const summary = document.getElementById('usage-summary');
+  const events = document.getElementById('usage-events');
+  if (!button || !modal || !summary || !events) return;
+  button.style.display = '';
+  const loadUsage = async () => {
+    const response = await fetch(`${basePath}/api/usage/me`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load usage');
+    summary.textContent = '';
+    [
+      ['Projects', data.summary.projects],
+      ['Conversations', data.summary.conversations],
+      ['Messages sent', data.summary.messages_sent],
+      ['Attachments', data.summary.attachments_uploaded],
+      ['Uploaded', formatUsageBytes(data.summary.uploaded_bytes)]
+    ].forEach(([label, value]) => {
+      const card = document.createElement('div'); card.className = 'usage-card';
+      const number = document.createElement('span'); number.className = 'usage-value'; number.textContent = value;
+      const caption = document.createElement('span'); caption.className = 'usage-label'; caption.textContent = label;
+      card.append(number, caption); summary.appendChild(card);
+    });
+    appendUsageEvents(events, data.events);
+  };
+  button.addEventListener('click', async () => {
+    modal.hidden = false;
+    try { await loadUsage(); } catch (err) { summary.textContent = ''; appendUsageEvents(events, []); events.firstChild.textContent = err.message; }
+  });
+  document.getElementById('close-usage-modal').addEventListener('click', () => { modal.hidden = true; });
+}
+
+function setupUsageAudit(basePath, user) {
+  if (user?.role !== 'admin') return;
+  const button = document.getElementById('audit-btn');
+  const modal = document.getElementById('audit-modal');
+  const filter = document.getElementById('audit-user-filter');
+  const summary = document.getElementById('audit-user-summary');
+  const events = document.getElementById('audit-events');
+  button.style.display = '';
+  const loadAudit = async () => {
+    const query = filter.value ? `?user_id=${encodeURIComponent(filter.value)}` : '';
+    const response = await fetch(`${basePath}/api/admin/usage${query}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load audit');
+    const selected = filter.value;
+    filter.textContent = '';
+    const all = document.createElement('option'); all.value = ''; all.textContent = 'All users'; filter.appendChild(all);
+    data.users.forEach((account) => {
+      const option = document.createElement('option'); option.value = account.id; option.textContent = account.username; filter.appendChild(option);
+    });
+    filter.value = selected;
+    summary.textContent = '';
+    const table = document.createElement('table');
+    const head = document.createElement('thead'); const headerRow = document.createElement('tr');
+    ['User', 'Role', 'Projects', 'Conversations', 'Messages', 'Attachments', 'Last active'].forEach((title) => { const cell = document.createElement('th'); cell.textContent = title; headerRow.appendChild(cell); });
+    head.appendChild(headerRow); table.appendChild(head);
+    const body = document.createElement('tbody');
+    data.users.forEach((account) => {
+      const row = document.createElement('tr');
+      [account.username, account.role, account.projects, account.conversations, account.messages_sent, account.attachments_uploaded, formatUsageTime(account.last_active_at)].forEach((value) => { const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell); });
+      body.appendChild(row);
+    });
+    table.appendChild(body); summary.appendChild(table);
+    appendUsageEvents(events, data.events, true);
+  };
+  button.addEventListener('click', async () => { modal.hidden = false; try { await loadAudit(); } catch (err) { summary.textContent = err.message; } });
+  filter.addEventListener('change', () => loadAudit().catch((err) => { summary.textContent = err.message; }));
+  document.getElementById('close-audit-modal').addEventListener('click', () => { modal.hidden = true; });
+}
+
 function setupAccountManagement(basePath, user) {
   if (user?.role !== 'admin') return;
   const button = document.getElementById('account-btn');
@@ -1160,6 +1272,8 @@ async function checkAuth() {
       // No password set, or already authenticated
       chatScreen.style.display = '';
       showLogoutButton(basePath, auth.user);
+      setupUsageMonitoring(basePath, auth.user);
+      setupUsageAudit(basePath, auth.user);
       setupAccountManagement(basePath, auth.user);
       new ZylosConsole(auth.timezone, auth.user);
       return;
@@ -1187,6 +1301,8 @@ async function checkAuth() {
         loginScreen.style.display = 'none';
         chatScreen.style.display = '';
         showLogoutButton(basePath, result.user);
+        setupUsageMonitoring(basePath, result.user);
+        setupUsageAudit(basePath, result.user);
         setupAccountManagement(basePath, result.user);
         new ZylosConsole(result.timezone, result.user);
       } else {

@@ -5,7 +5,14 @@ This plugin owns all locally developed Zylos console behavior:
 - project-scoped workspaces and Codex runner sessions;
 - project and conversation isolation in the Web Console and C4 dispatcher;
 - configured-model display, attachment preview fallback, persistent thinking state,
-  and per-conversation unsent message drafts.
+  per-conversation unsent message drafts, personal usage monitoring, and
+  administrator-only user usage auditing.
+
+Usage auditing records only operation metadata (event type, timestamp, resource
+IDs, attachment size/kind, and message/attachment counts). It never stores a
+message body, attachment filename, password, session token, or credential.
+Personal usage APIs are scoped to the authenticated user; the aggregate audit
+API requires the administrator role on the server.
 
 The Web Console and C4 bridge remain Zylos-managed runtime sources. This plugin
 keeps a versioned baseline plus the local customization for each touched source.

@@ -8,7 +8,10 @@ project workspaces.
 It provides project-scoped workspaces and Codex runner sessions, scoped
 conversations and attachments, model information in the console header,
 attachment rendering fallback, persistent thinking indicators, and unsent
-per-conversation drafts.
+per-conversation drafts. It also includes personal usage monitoring and an
+administrator-only user usage audit page; audit records contain operation
+metadata only, never message bodies, attachment filenames, passwords, sessions,
+or credentials.
 
 ## Install on another machine
 

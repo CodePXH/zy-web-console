@@ -31,7 +31,7 @@ import {
   splitContentAndAttachments,
   uploadKind
 } from './attachment-utils.js';
-import { openDb, SessionStore, PersistentUploadRegistry, UserStore } from './db.js';
+import { openDb, SessionStore, PersistentUploadRegistry, UserStore, UsageAuditStore } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,6 +76,7 @@ const wcDb = openDb();
 const sessionStore = new SessionStore(wcDb);
 const userStore = new UserStore(wcDb);
 const uploadRegistry = new PersistentUploadRegistry(wcDb);
+const usageAudit = new UsageAuditStore(wcDb);
 
 wcDb.exec(`
   CREATE TABLE IF NOT EXISTS projects (
@@ -515,6 +516,13 @@ async function sendConsoleMessage({ content, attachmentIds, sessionId, userId, c
     wcDb.prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?')
       .run(titleFromFirstMessage(content), Date.now(), conversation.id);
   }
+  usageAudit.log({
+    userId,
+    eventType: 'message_sent',
+    projectId: conversation.project_id,
+    conversationId: conversation.id,
+    details: { characters: String(content || '').length, attachments: attachmentEntries.length }
+  });
   return {
     content: combined,
     attachments: attachmentEntries.map((entry) => ({
@@ -720,10 +728,11 @@ app.post('/api/upload', (req, res) => {
       return res.status(400).json({ success: false, error: 'file_required' });
     }
 
+    const identity = getIdentity(req);
     const name = sanitizeDisplayName(req.file.originalname, 'attachment');
     const entry = uploadRegistry.add({
-      sessionId: getIdentity(req).sessionId,
-      userId: getIdentity(req).user.id,
+      sessionId: identity.sessionId,
+      userId: identity.user.id,
       path: req.file.path,
       name,
       size: req.file.size,
@@ -732,6 +741,11 @@ app.post('/api/upload', (req, res) => {
           : `${(req.file.size / (1024 * 1024)).toFixed(1)}MB`,
       mime: req.file.mimetype || 'application/octet-stream',
       kind: uploadKind(req.file)
+    });
+    usageAudit.log({
+      userId: identity.user.id,
+      eventType: 'attachment_uploaded',
+      details: { bytes: req.file.size, kind: entry.kind }
     });
 
     return res.json({
@@ -767,6 +781,12 @@ app.get('/api/me', (req, res) => {
   res.json({ user: identity.user });
 });
 
+app.get('/api/usage/me', (req, res) => {
+  const identity = getIdentity(req);
+  const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 20, 1), 50);
+  res.json(usageAudit.personalUsage(identity.user.id, limit));
+});
+
 app.get('/api/projects', (req, res) => {
   const identity = getIdentity(req);
   const projects = wcDb.prepare('SELECT * FROM projects WHERE owner_id = ? ORDER BY updated_at DESC').all(identity.user.id)
@@ -777,7 +797,9 @@ app.get('/api/projects', (req, res) => {
 
 app.post('/api/projects', (req, res) => {
   const identity = getIdentity(req);
-  res.status(201).json(createProject(identity.user.id, req.body.title));
+  const project = createProject(identity.user.id, req.body.title);
+  usageAudit.log({ userId: identity.user.id, eventType: 'project_created', projectId: project.id });
+  res.status(201).json(project);
 });
 
 app.patch('/api/projects/:id', (req, res) => {
@@ -795,6 +817,7 @@ app.delete('/api/projects/:id', (req, res) => {
   const identity = getIdentity(req);
   try {
     if (!deleteProject(identity.user.id, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+    usageAudit.log({ userId: identity.user.id, eventType: 'project_deleted', projectId: req.params.id });
     res.json({ success: true });
   } catch (err) {
     console.error('Failed to delete project:', err);
@@ -815,6 +838,7 @@ app.post('/api/conversations', (req, res) => {
   const project = getProject(identity.user.id, req.body.projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   const conversation = createConversation(identity.user.id, project.id, req.body.title);
+  usageAudit.log({ userId: identity.user.id, eventType: 'conversation_created', projectId: project.id, conversationId: conversation.id });
   res.status(201).json(conversation);
 });
 
@@ -834,6 +858,7 @@ app.delete('/api/conversations/:id', (req, res) => {
   if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
   // C4 messages remain retained for audit; removing this index entry only removes it from this user's workspace.
   wcDb.prepare('DELETE FROM conversations WHERE id = ? AND owner_id = ?').run(conversation.id, identity.user.id);
+  usageAudit.log({ userId: identity.user.id, eventType: 'conversation_deleted', projectId: conversation.project_id, conversationId: conversation.id });
   res.json({ success: true });
 });
 
@@ -844,6 +869,12 @@ function requireAdmin(req, res, next) {
 }
 
 app.get('/api/users', requireAdmin, (_req, res) => res.json(userStore.list()));
+
+app.get('/api/admin/usage', requireAdmin, (req, res) => {
+  const userId = typeof req.query.user_id === 'string' && req.query.user_id ? req.query.user_id : null;
+  const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 100, 1), 250);
+  res.json(usageAudit.adminUsage({ userId, limit }));
+});
 
 app.post('/api/users', requireAdmin, (req, res) => {
   try {
@@ -985,6 +1016,7 @@ app.post('/api/auth', (req, res) => {
   }
 
   const token = sessionStore.create(user.id);
+  usageAudit.log({ userId: user.id, eventType: 'login_success' });
   const maxAge = remember !== false ? `; Max-Age=${sessionStore.maxAgeSec}` : '';
   res.setHeader('Set-Cookie', `wc_session=${token}; Path=/; HttpOnly; SameSite=Strict${maxAge}`);
   res.json({ success: true, timezone: ENV.TZ || null, user });
