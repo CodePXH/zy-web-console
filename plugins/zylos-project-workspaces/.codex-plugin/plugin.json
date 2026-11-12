@@ -1,6 +1,6 @@
 {
   "name": "zylos-project-workspaces",
-  "version": "0.2.0+codex.20261112-native-usage-chart",
+  "version": "0.2.0+codex.20261112-native-usage-sqlite",
   "description": "Zylos Web Console customizations, project-workspace isolation, and upgrade-safe compatibility overlays.",
   "author": {
     "name": "Local developer"

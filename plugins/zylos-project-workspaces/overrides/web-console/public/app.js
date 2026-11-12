@@ -1316,7 +1316,20 @@ function setupOperationsDashboard(basePath, user) {
         if (entry.total_tokens > 0) { const dot = document.createElementNS(svgNs, 'circle'); dot.setAttribute('class', 'chart-dot'); dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', '3.4'); const title = document.createElementNS(svgNs, 'title'); title.textContent = `${entry.date}: ${formatEstimatedTokens(entry.total_tokens)} ${native ? 'native' : 'estimated'} tokens · ${entry.requests} requests`; dot.appendChild(title); svg.appendChild(dot); }
         if (index === 0 || index === data.trend.length - 1 || index % 3 === 0) { const label = document.createElementNS(svgNs, 'text'); label.setAttribute('class', 'chart-axis-label'); label.setAttribute('x', x); label.setAttribute('y', 181); label.setAttribute('text-anchor', index === 0 ? 'start' : index === data.trend.length - 1 ? 'end' : 'middle'); label.textContent = entry.date.slice(5); svg.appendChild(label); }
       });
-      trend.appendChild(svg);
+      const tooltip = document.createElement('div'); tooltip.className = 'chart-tooltip'; tooltip.hidden = true;
+      const showTooltip = (event) => {
+        const rect = svg.getBoundingClientRect();
+        // Match the SVG plot region exactly: it has a 25/10 viewBox-unit
+        // gutter for labels, so using the full element width shifts hover.
+        const plotLeft = rect.left + rect.width * left / 1000;
+        const plotWidth = rect.width * width / 1000;
+        const ratio = Math.min(1, Math.max(0, (event.clientX - plotLeft) / plotWidth));
+        const index = Math.round(ratio * (data.trend.length - 1)); const entry = data.trend[index];
+        tooltip.textContent = `${entry.date} · ${formatEstimatedTokens(entry.total_tokens)} ${native ? 'native' : 'estimated'} tokens · ${entry.requests} requests`;
+        tooltip.hidden = false; tooltip.style.left = `${Math.min(Math.max(event.clientX - rect.left, 84), rect.width - 84)}px`;
+      };
+      svg.addEventListener('mousemove', showTooltip); svg.addEventListener('mouseenter', showTooltip); svg.addEventListener('mouseleave', () => { tooltip.hidden = true; });
+      trend.append(svg, tooltip);
     }
     users.textContent = '';
     const maximum = Math.max(1, ...data.users.map((account) => account.total_tokens));

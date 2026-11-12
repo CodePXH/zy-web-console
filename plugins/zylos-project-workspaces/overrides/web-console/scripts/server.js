@@ -1010,7 +1010,7 @@ function collectNativeTokenUsage(days) {
       if (seen.has(key)) continue;
       seen.add(key);
       records.push({
-        user_id: ownerId, date: new Date(timestamp).toISOString().slice(0, 10), requests: 1,
+        response_id: responseId, user_id: ownerId, date: new Date(timestamp).toISOString().slice(0, 10), occurred_at: timestamp, requests: 1,
         input_tokens: usage.input_tokens || 0, cached_input_tokens: usage.cached_input_tokens || 0,
         output_tokens: usage.output_tokens || 0, reasoning_output_tokens: usage.reasoning_output_tokens || 0,
         total_tokens: usage.total_tokens || 0
@@ -1031,7 +1031,16 @@ app.get('/api/admin/usage', requireAdmin, (req, res) => {
 
 app.get('/api/admin/dashboard', requireAdmin, (req, res) => {
   const days = Math.min(Math.max(Number.parseInt(req.query.days, 10) || 14, 1), 90);
-  res.json(usageAudit.dashboardUsage(db, { days, nativeUsage: collectNativeTokenUsage(days) }));
+  const nativeUsage = collectNativeTokenUsage(days);
+  const insertNativeUsage = wcDb.prepare(`INSERT OR IGNORE INTO native_token_usage
+    (response_id, user_id, usage_date, occurred_at, input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens, total_tokens)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const persistNativeUsage = wcDb.transaction((records) => records.forEach((record) => insertNativeUsage.run(
+    record.response_id, record.user_id, record.date, record.occurred_at, record.input_tokens,
+    record.cached_input_tokens, record.output_tokens, record.reasoning_output_tokens, record.total_tokens
+  )));
+  persistNativeUsage(nativeUsage);
+  res.json(usageAudit.dashboardUsage(db, { days, nativeUsage }));
 });
 
 app.post('/api/users', requireAdmin, (req, res) => {

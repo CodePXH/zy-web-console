@@ -59,6 +59,17 @@ function openDb(dbPath = DB_PATH) {
       details_json TEXT,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS native_token_usage (
+      response_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      usage_date TEXT NOT NULL,
+      occurred_at INTEGER NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0
+    );
   `);
   const sessionColumns = db.prepare("PRAGMA table_info(sessions)").all().map((column) => column.name);
   if (!sessionColumns.includes('user_id')) db.exec('ALTER TABLE sessions ADD COLUMN user_id TEXT');
@@ -69,6 +80,7 @@ function openDb(dbPath = DB_PATH) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_uploads_access ON uploads(path, user_id, conversation_id, consumed)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_usage_events_user_created ON usage_events(user_id, created_at DESC)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_native_token_usage_user_date ON native_token_usage(user_id, usage_date DESC)');
   return db;
 }
 
