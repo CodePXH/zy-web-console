@@ -397,7 +397,12 @@ export class UsageAuditStore {
         ...allTotals
       },
       users: userRows,
-      trend: [...daily.entries()].map(([date, values]) => ({ date, ...values }))
+      // Always return consecutive days so the visual timeline does not hide
+      // inactive dates or make the x-axis appear incomplete.
+      trend: Array.from({ length: Math.round((now - cutoff) / 86400000) }, (_unused, index) => {
+        const date = new Date(cutoff + index * 86400000).toISOString().slice(0, 10);
+        return { date, ...(daily.get(date) || emptyTokenTotals()) };
+      })
     };
   }
 }

@@ -1269,10 +1269,11 @@ function setupOperationsDashboard(basePath, user) {
   const modal = document.getElementById('dashboard-modal');
   const summary = document.getElementById('dashboard-summary');
   const trend = document.getElementById('dashboard-trend');
+  const trendLog = document.getElementById('dashboard-trend-log');
   const users = document.getElementById('dashboard-users');
   const monitoring = document.getElementById('dashboard-monitoring');
   const period = document.getElementById('dashboard-period');
-  if (!button || !modal || !summary || !trend || !users || !monitoring || !period) return;
+  if (!button || !modal || !summary || !trend || !trendLog || !users || !monitoring || !period) return;
   button.style.display = '';
 
   const statCard = (label, value, hint) => {
@@ -1296,6 +1297,7 @@ function setupOperationsDashboard(basePath, user) {
     ].forEach(([label, value, hint]) => summary.appendChild(statCard(label, value, hint)));
     period.textContent = `last ${data.period_days} days`;
     trend.textContent = '';
+    trendLog.textContent = '';
     const maxTokens = Math.max(1, ...data.trend.map((entry) => entry.total_tokens));
     if (!data.trend.length) {
       const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = 'No routed conversation activity in this period.'; trend.appendChild(empty);
@@ -1309,6 +1311,11 @@ function setupOperationsDashboard(basePath, user) {
         column.append(bar, tooltip, label); trend.appendChild(column);
       });
     }
+    data.trend.forEach((entry) => {
+      const item = document.createElement('span'); item.className = 'dashboard-trend-log-item';
+      item.textContent = `${entry.date.slice(5)} · ${formatEstimatedTokens(entry.total_tokens)} · ${entry.requests} req`;
+      trendLog.appendChild(item);
+    });
     users.textContent = '';
     const maximum = Math.max(1, ...data.users.map((account) => account.total_tokens));
     if (!data.users.length) {
