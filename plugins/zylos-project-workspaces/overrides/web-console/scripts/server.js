@@ -119,6 +119,11 @@ const USER_CAPABILITIES = [
     how: '管理员登录后点击左侧 Usage audit。不会显示消息正文或凭据。'
   },
   {
+    id: 'admin-dashboard', title: '运行驾驶舱', category: '管理员', adminOnly: true,
+    description: '总览全体用户的估算 Token、请求趋势、活跃度、工作区和既有操作监控。',
+    how: '管理员登录后点击左侧 Operations dashboard。Token 为本地消息文本估算值，不是模型供应商账单。'
+  },
+  {
     id: 'account-management', title: '账号管理', category: '管理员', adminOnly: true,
     description: '创建普通用户或管理员账号，并停用普通用户账号。',
     how: '管理员登录后点击左侧 Manage accounts。'
@@ -953,6 +958,11 @@ app.get('/api/admin/usage', requireAdmin, (req, res) => {
   const userId = typeof req.query.user_id === 'string' && req.query.user_id ? req.query.user_id : null;
   const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 100, 1), 250);
   res.json(usageAudit.adminUsage({ userId, limit }));
+});
+
+app.get('/api/admin/dashboard', requireAdmin, (req, res) => {
+  const days = Math.min(Math.max(Number.parseInt(req.query.days, 10) || 14, 1), 90);
+  res.json(usageAudit.dashboardUsage(db, { days }));
 });
 
 app.post('/api/users', requireAdmin, (req, res) => {

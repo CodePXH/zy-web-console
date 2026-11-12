@@ -16,6 +16,11 @@ or credentials.
 All signed-in users can open **Skills & guide** in the console sidebar to see
 the installed user-facing capabilities and ready-to-adapt prompt examples.
 
+Administrators also receive an **Operations dashboard** with a 14-day request
+and estimated Token trend, per-user ranking, workspace totals, and the existing
+activity-monitoring counters. Token values are local text-based estimates, not
+provider billing records.
+
 ## Install on another machine
 
 Prerequisites: Git, Node.js, Codex CLI, Zylos, and the `web-console` and

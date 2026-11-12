@@ -34,6 +34,7 @@
         <span id="current-user"></span>
         <button class="account-btn" id="guide-btn" style="display:none">Skills &amp; guide</button>
         <button class="account-btn" id="usage-btn" style="display:none">My usage</button>
+        <button class="account-btn" id="dashboard-btn" style="display:none">Operations dashboard</button>
         <button class="account-btn" id="audit-btn" style="display:none">Usage audit</button>
         <button class="account-btn" id="account-btn" style="display:none">Manage accounts</button>
       </div>
@@ -132,6 +133,24 @@
       <div id="audit-user-summary" class="audit-user-summary"></div>
       <h3 class="usage-heading">Recent activity</h3>
       <div id="audit-events" class="usage-events"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="dashboard-modal" hidden>
+    <div class="modal dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="dashboard-modal-title">
+      <div class="modal-header">
+        <div><h2 id="dashboard-modal-title">Operations dashboard</h2><p class="dashboard-subtitle">Last 14 days · Token values are estimates</p></div>
+        <button id="close-dashboard-modal" class="modal-close" aria-label="Close">×</button>
+      </div>
+      <div id="dashboard-summary" class="dashboard-summary"></div>
+      <section class="dashboard-section">
+        <div class="dashboard-section-heading"><h3>Token trend</h3><span id="dashboard-period"></span></div>
+        <div id="dashboard-trend" class="dashboard-trend" aria-label="Estimated token usage trend"></div>
+      </section>
+      <section class="dashboard-section dashboard-grid">
+        <div class="dashboard-panel"><div class="dashboard-section-heading"><h3>User token ranking</h3><span>estimated</span></div><div id="dashboard-users" class="dashboard-users"></div></div>
+        <div class="dashboard-panel"><div class="dashboard-section-heading"><h3>Monitoring overview</h3><span>all time</span></div><div id="dashboard-monitoring" class="dashboard-monitoring"></div></div>
+      </section>
     </div>
   </div>
 

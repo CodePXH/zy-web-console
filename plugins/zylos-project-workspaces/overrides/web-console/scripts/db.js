@@ -313,6 +313,106 @@ export class UsageAuditStore {
     `).all(userId, userId, limit);
     return { users, events: events.map(normalizeEvent) };
   }
+
+  /**
+   * Build an administrator-only dashboard from the local workspace index and
+   * the C4 message journal. C4 does not expose provider billing usage, so the
+   * token value here is intentionally an estimate based on visible message
+   * text. Raw message text never leaves this method.
+   */
+  dashboardUsage(c4Db, { days = 14 } = {}) {
+    const now = Date.now();
+    const cutoff = now - Math.max(1, Math.min(Number(days) || 14, 90)) * 24 * 60 * 60 * 1000;
+    const users = this.db.prepare(`
+      SELECT id, username, role, created_at FROM users
+      WHERE disabled_at IS NULL ORDER BY username COLLATE NOCASE
+    `).all();
+    const conversations = this.db.prepare(`
+      SELECT id, owner_id, project_id FROM conversations
+    `).all();
+    const endpointOwners = new Map();
+    for (const conversation of conversations) {
+      endpointOwners.set(`wc-${conversation.owner_id}-${conversation.id}`, conversation.owner_id);
+      if (conversation.project_id) endpointOwners.set(`wcp-${conversation.project_id}-${conversation.owner_id}-${conversation.id}`, conversation.owner_id);
+    }
+
+    const totals = new Map(users.map((user) => [user.id, emptyTokenTotals()]));
+    const daily = new Map();
+    const rows = c4Db.prepare(`
+      SELECT direction, endpoint_id, content, timestamp
+      FROM conversations
+      WHERE channel = 'web-console' AND timestamp >= datetime(?, 'unixepoch')
+      ORDER BY timestamp ASC
+    `).all(Math.floor(cutoff / 1000));
+    for (const row of rows) {
+      const userId = endpointOwners.get(row.endpoint_id);
+      if (!userId || !totals.has(userId)) continue;
+      const estimate = estimateTokens(row.content);
+      const summary = totals.get(userId);
+      const day = String(row.timestamp || '').slice(0, 10);
+      if (!day) continue;
+      const daySummary = daily.get(day) || emptyTokenTotals();
+      const isInput = row.direction === 'in';
+      summary.requests += isInput ? 1 : 0;
+      summary.input_tokens += isInput ? estimate : 0;
+      summary.output_tokens += isInput ? 0 : estimate;
+      summary.total_tokens += estimate;
+      daySummary.requests += isInput ? 1 : 0;
+      daySummary.input_tokens += isInput ? estimate : 0;
+      daySummary.output_tokens += isInput ? 0 : estimate;
+      daySummary.total_tokens += estimate;
+      daily.set(day, daySummary);
+    }
+
+    const monitoring = this.db.prepare(`
+      SELECT
+        COUNT(*) AS events,
+        SUM(CASE WHEN event_type = 'message_sent' THEN 1 ELSE 0 END) AS messages_sent,
+        SUM(CASE WHEN event_type = 'attachment_uploaded' THEN 1 ELSE 0 END) AS attachments_uploaded,
+        COUNT(DISTINCT CASE WHEN created_at >= ? THEN user_id END) AS active_users
+      FROM usage_events
+    `).get(cutoff);
+    const projectCount = this.db.prepare('SELECT COUNT(*) AS count FROM projects').get().count;
+    const conversationCount = this.db.prepare('SELECT COUNT(*) AS count FROM conversations').get().count;
+    const userRows = users.map((user) => ({ ...user, ...totals.get(user.id) }))
+      .sort((a, b) => b.total_tokens - a.total_tokens || b.requests - a.requests || a.username.localeCompare(b.username));
+    const allTotals = userRows.reduce((sum, user) => ({
+      requests: sum.requests + user.requests,
+      input_tokens: sum.input_tokens + user.input_tokens,
+      output_tokens: sum.output_tokens + user.output_tokens,
+      total_tokens: sum.total_tokens + user.total_tokens
+    }), emptyTokenTotals());
+    return {
+      estimated: true,
+      period_days: Math.round((now - cutoff) / 86400000),
+      generated_at: now,
+      summary: {
+        users: users.length,
+        active_users: monitoring.active_users || 0,
+        projects: projectCount,
+        conversations: conversationCount,
+        monitoring_events: monitoring.events || 0,
+        messages_sent: monitoring.messages_sent || 0,
+        attachments_uploaded: monitoring.attachments_uploaded || 0,
+        ...allTotals
+      },
+      users: userRows,
+      trend: [...daily.entries()].map(([date, values]) => ({ date, ...values }))
+    };
+  }
+}
+
+function emptyTokenTotals() {
+  return { requests: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+}
+
+function estimateTokens(content) {
+  const text = String(content || '');
+  // CJK characters commonly consume about one token; prose in Latin scripts
+  // averages roughly four characters per token. This is an aggregate estimate.
+  const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/g) || []).length;
+  const remaining = Math.max(0, text.length - cjk);
+  return Math.max(0, Math.ceil(cjk * 1.2 + remaining / 4));
 }
 
 function normalizeEvent(event) {

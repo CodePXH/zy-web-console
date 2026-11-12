@@ -1256,6 +1256,89 @@ function setupUsageAudit(basePath, user) {
   document.getElementById('close-audit-modal').addEventListener('click', () => { modal.hidden = true; });
 }
 
+function formatEstimatedTokens(value) {
+  const number = Number(value) || 0;
+  if (number >= 1000000) return `${(number / 1000000).toFixed(2)}M`;
+  if (number >= 1000) return `${(number / 1000).toFixed(1)}K`;
+  return String(number);
+}
+
+function setupOperationsDashboard(basePath, user) {
+  if (user?.role !== 'admin') return;
+  const button = document.getElementById('dashboard-btn');
+  const modal = document.getElementById('dashboard-modal');
+  const summary = document.getElementById('dashboard-summary');
+  const trend = document.getElementById('dashboard-trend');
+  const users = document.getElementById('dashboard-users');
+  const monitoring = document.getElementById('dashboard-monitoring');
+  const period = document.getElementById('dashboard-period');
+  if (!button || !modal || !summary || !trend || !users || !monitoring || !period) return;
+  button.style.display = '';
+
+  const statCard = (label, value, hint) => {
+    const card = document.createElement('article'); card.className = 'dashboard-card';
+    const labelNode = document.createElement('span'); labelNode.className = 'dashboard-label'; labelNode.textContent = label;
+    const valueNode = document.createElement('strong'); valueNode.className = 'dashboard-value'; valueNode.textContent = value;
+    const hintNode = document.createElement('span'); hintNode.className = 'dashboard-hint'; hintNode.textContent = hint;
+    card.append(labelNode, valueNode, hintNode); return card;
+  };
+  const loadDashboard = async () => {
+    const response = await fetch(`${basePath}/api/admin/dashboard?days=14`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load dashboard');
+    const totals = data.summary;
+    summary.textContent = '';
+    [
+      ['Estimated tokens', formatEstimatedTokens(totals.total_tokens), `Input ${formatEstimatedTokens(totals.input_tokens)} · Output ${formatEstimatedTokens(totals.output_tokens)}`],
+      ['Requests', totals.requests, `${totals.messages_sent} workspace messages logged`],
+      ['Active users', `${totals.active_users} / ${totals.users}`, `In the last ${data.period_days} days`],
+      ['Workspaces', totals.projects, `${totals.conversations} conversations`]
+    ].forEach(([label, value, hint]) => summary.appendChild(statCard(label, value, hint)));
+    period.textContent = `last ${data.period_days} days`;
+    trend.textContent = '';
+    const maxTokens = Math.max(1, ...data.trend.map((entry) => entry.total_tokens));
+    if (!data.trend.length) {
+      const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = 'No routed conversation activity in this period.'; trend.appendChild(empty);
+    } else {
+      data.trend.forEach((entry) => {
+        const column = document.createElement('div'); column.className = 'dashboard-bar';
+        const bar = document.createElement('i'); const ratio = Math.max(3, Math.round(entry.total_tokens / maxTokens * 100));
+        bar.style.height = `${ratio}%`; column.style.setProperty('--bar-height', `${ratio}%`);
+        const tooltip = document.createElement('b'); tooltip.textContent = `${entry.date}: ${formatEstimatedTokens(entry.total_tokens)} tokens · ${entry.requests} requests`;
+        const label = document.createElement('small'); label.textContent = entry.date.slice(5);
+        column.append(bar, tooltip, label); trend.appendChild(column);
+      });
+    }
+    users.textContent = '';
+    const maximum = Math.max(1, ...data.users.map((account) => account.total_tokens));
+    if (!data.users.length) {
+      const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = 'No active accounts.'; users.appendChild(empty);
+    } else {
+      data.users.forEach((account) => {
+        const row = document.createElement('div'); row.className = 'dashboard-user';
+        const name = document.createElement('span'); name.className = 'dashboard-user-name'; name.textContent = account.username;
+        const track = document.createElement('span'); track.className = 'dashboard-user-track'; const fill = document.createElement('i'); fill.style.width = `${Math.max(0, account.total_tokens / maximum * 100)}%`; track.appendChild(fill);
+        const value = document.createElement('span'); value.className = 'dashboard-user-value'; value.textContent = formatEstimatedTokens(account.total_tokens);
+        const meta = document.createElement('span'); meta.className = 'dashboard-user-meta'; meta.textContent = `${account.requests} requests · input ${formatEstimatedTokens(account.input_tokens)} · output ${formatEstimatedTokens(account.output_tokens)}`;
+        row.append(name, track, value, meta); users.appendChild(row);
+      });
+    }
+    monitoring.textContent = '';
+    [
+      [totals.monitoring_events, 'Audit events'], [totals.messages_sent, 'Messages sent'],
+      [totals.attachments_uploaded, 'Attachments'], [totals.conversations, 'Conversations']
+    ].forEach(([value, label]) => {
+      const item = document.createElement('div'); const number = document.createElement('span'); number.textContent = value;
+      const caption = document.createElement('small'); caption.textContent = label; item.append(number, caption); monitoring.appendChild(item);
+    });
+  };
+  button.addEventListener('click', async () => {
+    modal.hidden = false;
+    try { await loadDashboard(); } catch (err) { summary.textContent = ''; summary.appendChild(statCard('Dashboard unavailable', '—', err.message)); }
+  });
+  document.getElementById('close-dashboard-modal').addEventListener('click', () => { modal.hidden = true; });
+}
+
 function setupAccountManagement(basePath, user) {
   if (user?.role !== 'admin') return;
   const button = document.getElementById('account-btn');
@@ -1307,6 +1390,7 @@ async function checkAuth() {
       showLogoutButton(basePath, auth.user);
       setupSkillsGuide(basePath, auth.user);
       setupUsageMonitoring(basePath, auth.user);
+      setupOperationsDashboard(basePath, auth.user);
       setupUsageAudit(basePath, auth.user);
       setupAccountManagement(basePath, auth.user);
       new ZylosConsole(auth.timezone, auth.user);
@@ -1337,6 +1421,7 @@ async function checkAuth() {
         showLogoutButton(basePath, result.user);
         setupSkillsGuide(basePath, result.user);
         setupUsageMonitoring(basePath, result.user);
+        setupOperationsDashboard(basePath, result.user);
         setupUsageAudit(basePath, result.user);
         setupAccountManagement(basePath, result.user);
         new ZylosConsole(result.timezone, result.user);
