@@ -1269,11 +1269,11 @@ function setupOperationsDashboard(basePath, user) {
   const modal = document.getElementById('dashboard-modal');
   const summary = document.getElementById('dashboard-summary');
   const trend = document.getElementById('dashboard-trend');
-  const trendLog = document.getElementById('dashboard-trend-log');
   const users = document.getElementById('dashboard-users');
   const monitoring = document.getElementById('dashboard-monitoring');
   const period = document.getElementById('dashboard-period');
-  if (!button || !modal || !summary || !trend || !trendLog || !users || !monitoring || !period) return;
+  const legendLabel = document.getElementById('dashboard-legend-label');
+  if (!button || !modal || !summary || !trend || !users || !monitoring || !period || !legendLabel) return;
   button.style.display = '';
 
   const statCard = (label, value, hint) => {
@@ -1288,34 +1288,36 @@ function setupOperationsDashboard(basePath, user) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not load dashboard');
     const totals = data.summary;
+    const native = data.usage_source === 'native';
+    legendLabel.textContent = native ? 'Native usage' : 'Estimated tokens';
     summary.textContent = '';
     [
-      ['Estimated tokens', formatEstimatedTokens(totals.total_tokens), `Input ${formatEstimatedTokens(totals.input_tokens)} · Output ${formatEstimatedTokens(totals.output_tokens)}`],
+      [native ? 'Native tokens' : 'Estimated tokens', formatEstimatedTokens(totals.total_tokens), native ? `Input ${formatEstimatedTokens(totals.input_tokens)} · Cache ${formatEstimatedTokens(totals.cached_input_tokens)} · Output ${formatEstimatedTokens(totals.output_tokens)}` : `Input ${formatEstimatedTokens(totals.input_tokens)} · Output ${formatEstimatedTokens(totals.output_tokens)}`],
       ['Requests', totals.requests, `${totals.messages_sent} workspace messages logged`],
       ['Active users', `${totals.active_users} / ${totals.users}`, `In the last ${data.period_days} days`],
       ['Workspaces', totals.projects, `${totals.conversations} conversations`]
     ].forEach(([label, value, hint]) => summary.appendChild(statCard(label, value, hint)));
     period.textContent = `last ${data.period_days} days`;
     trend.textContent = '';
-    trendLog.textContent = '';
     const maxTokens = Math.max(1, ...data.trend.map((entry) => entry.total_tokens));
     if (!data.trend.length) {
       const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = 'No routed conversation activity in this period.'; trend.appendChild(empty);
     } else {
-      data.trend.forEach((entry) => {
-        const column = document.createElement('div'); column.className = 'dashboard-bar';
-        const bar = document.createElement('i'); const ratio = Math.max(3, Math.round(entry.total_tokens / maxTokens * 100));
-        bar.style.height = `${ratio}%`; column.style.setProperty('--bar-height', `${ratio}%`);
-        const tooltip = document.createElement('b'); tooltip.textContent = `${entry.date}: ${formatEstimatedTokens(entry.total_tokens)} tokens · ${entry.requests} requests`;
-        const label = document.createElement('small'); label.textContent = entry.date.slice(5);
-        column.append(bar, tooltip, label); trend.appendChild(column);
+      const svgNs = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(svgNs, 'svg'); svg.classList.add('dashboard-line-chart'); svg.setAttribute('viewBox', '0 0 1000 190'); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Token trend for the last 14 days');
+      const defs = document.createElementNS(svgNs, 'defs'); const gradient = document.createElementNS(svgNs, 'linearGradient'); gradient.setAttribute('id', 'chart-gradient'); gradient.setAttribute('x1', '0'); gradient.setAttribute('x2', '0'); gradient.setAttribute('y1', '0'); gradient.setAttribute('y2', '1'); const stopTop = document.createElementNS(svgNs, 'stop'); stopTop.setAttribute('offset', '0%'); stopTop.setAttribute('stop-color', '#32b5f1'); const stopBottom = document.createElementNS(svgNs, 'stop'); stopBottom.setAttribute('offset', '100%'); stopBottom.setAttribute('stop-color', '#32b5f1'); stopBottom.setAttribute('stop-opacity', '0'); gradient.append(stopTop, stopBottom); defs.appendChild(gradient); svg.appendChild(defs);
+      const left = 25; const right = 10; const top = 14; const bottom = 30; const width = 1000 - left - right; const height = 190 - top - bottom;
+      for (let grid = 0; grid < 4; grid += 1) { const y = top + height / 3 * grid; const line = document.createElementNS(svgNs, 'line'); line.setAttribute('class', 'chart-grid'); line.setAttribute('x1', left); line.setAttribute('x2', 1000 - right); line.setAttribute('y1', y); line.setAttribute('y2', y); svg.appendChild(line); }
+      const points = data.trend.map((entry, index) => ({ entry, x: left + width * index / Math.max(1, data.trend.length - 1), y: top + height - entry.total_tokens / maxTokens * height }));
+      const pointText = points.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+      const area = document.createElementNS(svgNs, 'path'); area.setAttribute('class', 'chart-area'); area.setAttribute('d', `M ${points[0].x.toFixed(1)} ${top + height} L ${pointText.replaceAll(',', ' ')} L ${points.at(-1).x.toFixed(1)} ${top + height} Z`); svg.appendChild(area);
+      const path = document.createElementNS(svgNs, 'polyline'); path.setAttribute('class', 'chart-line'); path.setAttribute('points', pointText); svg.appendChild(path);
+      points.forEach(({ entry, x, y }, index) => {
+        if (entry.total_tokens > 0) { const dot = document.createElementNS(svgNs, 'circle'); dot.setAttribute('class', 'chart-dot'); dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', '3.4'); const title = document.createElementNS(svgNs, 'title'); title.textContent = `${entry.date}: ${formatEstimatedTokens(entry.total_tokens)} ${native ? 'native' : 'estimated'} tokens · ${entry.requests} requests`; dot.appendChild(title); svg.appendChild(dot); }
+        if (index === 0 || index === data.trend.length - 1 || index % 3 === 0) { const label = document.createElementNS(svgNs, 'text'); label.setAttribute('class', 'chart-axis-label'); label.setAttribute('x', x); label.setAttribute('y', 181); label.setAttribute('text-anchor', index === 0 ? 'start' : index === data.trend.length - 1 ? 'end' : 'middle'); label.textContent = entry.date.slice(5); svg.appendChild(label); }
       });
+      trend.appendChild(svg);
     }
-    data.trend.forEach((entry) => {
-      const item = document.createElement('span'); item.className = 'dashboard-trend-log-item';
-      item.textContent = `${entry.date.slice(5)} · ${formatEstimatedTokens(entry.total_tokens)} · ${entry.requests} req`;
-      trendLog.appendChild(item);
-    });
     users.textContent = '';
     const maximum = Math.max(1, ...data.users.map((account) => account.total_tokens));
     if (!data.users.length) {
@@ -1326,7 +1328,7 @@ function setupOperationsDashboard(basePath, user) {
         const name = document.createElement('span'); name.className = 'dashboard-user-name'; name.textContent = account.username;
         const track = document.createElement('span'); track.className = 'dashboard-user-track'; const fill = document.createElement('i'); fill.style.width = `${Math.max(0, account.total_tokens / maximum * 100)}%`; track.appendChild(fill);
         const value = document.createElement('span'); value.className = 'dashboard-user-value'; value.textContent = formatEstimatedTokens(account.total_tokens);
-        const meta = document.createElement('span'); meta.className = 'dashboard-user-meta'; meta.textContent = `${account.requests} requests · input ${formatEstimatedTokens(account.input_tokens)} · output ${formatEstimatedTokens(account.output_tokens)}`;
+        const meta = document.createElement('span'); meta.className = 'dashboard-user-meta'; meta.textContent = native ? `${account.requests} requests · input ${formatEstimatedTokens(account.input_tokens)} · cache ${formatEstimatedTokens(account.cached_input_tokens)} · output ${formatEstimatedTokens(account.output_tokens)} · reasoning ${formatEstimatedTokens(account.reasoning_output_tokens)}` : `${account.requests} requests · input ${formatEstimatedTokens(account.input_tokens)} · output ${formatEstimatedTokens(account.output_tokens)}`;
         row.append(name, track, value, meta); users.appendChild(row);
       });
     }

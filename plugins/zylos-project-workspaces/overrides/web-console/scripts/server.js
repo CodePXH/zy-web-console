@@ -952,6 +952,75 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+let nativeUsageCache = { expiresAt: 0, records: [] };
+
+function collectNativeTokenUsage(days) {
+  const now = Date.now();
+  if (nativeUsageCache.expiresAt > now) return nativeUsageCache.records;
+  const cutoff = now - days * 86400000;
+  const workspaceOwners = new Map(wcDb.prepare('SELECT owner_id, workspace_path FROM projects WHERE workspace_path IS NOT NULL').all()
+    .map((project) => [path.resolve(project.workspace_path), project.owner_id]));
+  const endpointOwners = new Map();
+  for (const conversation of wcDb.prepare('SELECT id, owner_id, project_id FROM conversations').all()) {
+    endpointOwners.set(`wc-${conversation.owner_id}-${conversation.id}`, conversation.owner_id);
+    if (conversation.project_id) endpointOwners.set(`wcp-${conversation.project_id}-${conversation.owner_id}-${conversation.id}`, conversation.owner_id);
+  }
+  const root = path.join(os.homedir(), '.codex', 'sessions');
+  const files = [];
+  const walk = (directory) => {
+    let entries = [];
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const candidate = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(candidate);
+      else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        try { if (fs.statSync(candidate).mtimeMs >= cutoff) files.push(candidate); } catch { /* file rotated */ }
+      }
+    }
+  };
+  walk(root);
+  const records = [];
+  const seen = new Set();
+  for (const file of files) {
+    let cwd = null;
+    let routedUserId = null;
+    let lines = [];
+    try { lines = fs.readFileSync(file, 'utf8').split('\n'); } catch { continue; }
+    for (const line of lines) {
+      if (!line) continue;
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      const contextCwd = event.type === 'turn_context' ? event.payload?.cwd : event.payload?.thread_settings?.cwd;
+      if (contextCwd) cwd = path.resolve(contextCwd);
+      // C4 fetch output records the exact web-console endpoint that a Codex
+      // turn is handling. It lets the native CLI usage log be attributed to
+      // the owning user even when the runner is the shared root session.
+      const eventText = event.payload?.output?.map?.((item) => item?.text || '').join('\n') || event.payload?.item?.aggregated_output || '';
+      if (eventText) {
+        const endpoints = [...new Set([...String(eventText).matchAll(/web-console:(wcp?-[A-Za-z0-9-]+)/g)].map((match) => match[1]))];
+        routedUserId = endpoints.length === 1 ? endpointOwners.get(endpoints[0]) || null : null;
+      }
+      const ownerId = workspaceOwners.get(cwd) || routedUserId;
+      if (event.type !== 'token_usage_record' || !ownerId) continue;
+      const usage = event.payload?.usage;
+      const responseId = event.payload?.response_id;
+      const timestamp = Date.parse(event.timestamp);
+      if (!usage || !responseId || !Number.isFinite(timestamp) || timestamp < cutoff) continue;
+      const key = `${cwd}:${responseId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      records.push({
+        user_id: ownerId, date: new Date(timestamp).toISOString().slice(0, 10), requests: 1,
+        input_tokens: usage.input_tokens || 0, cached_input_tokens: usage.cached_input_tokens || 0,
+        output_tokens: usage.output_tokens || 0, reasoning_output_tokens: usage.reasoning_output_tokens || 0,
+        total_tokens: usage.total_tokens || 0
+      });
+    }
+  }
+  nativeUsageCache = { expiresAt: now + 60000, records };
+  return records;
+}
+
 app.get('/api/users', requireAdmin, (_req, res) => res.json(userStore.list()));
 
 app.get('/api/admin/usage', requireAdmin, (req, res) => {
@@ -962,7 +1031,7 @@ app.get('/api/admin/usage', requireAdmin, (req, res) => {
 
 app.get('/api/admin/dashboard', requireAdmin, (req, res) => {
   const days = Math.min(Math.max(Number.parseInt(req.query.days, 10) || 14, 1), 90);
-  res.json(usageAudit.dashboardUsage(db, { days }));
+  res.json(usageAudit.dashboardUsage(db, { days, nativeUsage: collectNativeTokenUsage(days) }));
 });
 
 app.post('/api/users', requireAdmin, (req, res) => {

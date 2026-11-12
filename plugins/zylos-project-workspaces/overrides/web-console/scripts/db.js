@@ -320,7 +320,7 @@ export class UsageAuditStore {
    * token value here is intentionally an estimate based on visible message
    * text. Raw message text never leaves this method.
    */
-  dashboardUsage(c4Db, { days = 14 } = {}) {
+  dashboardUsage(c4Db, { days = 14, nativeUsage = [] } = {}) {
     const now = Date.now();
     const cutoff = now - Math.max(1, Math.min(Number(days) || 14, 90)) * 24 * 60 * 60 * 1000;
     const users = this.db.prepare(`
@@ -374,6 +374,26 @@ export class UsageAuditStore {
     `).get(cutoff);
     const projectCount = this.db.prepare('SELECT COUNT(*) AS count FROM projects').get().count;
     const conversationCount = this.db.prepare('SELECT COUNT(*) AS count FROM conversations').get().count;
+    let usageSource = 'estimated_text';
+    if (nativeUsage.length > 0) {
+      usageSource = 'native';
+      const nativeTotals = new Map(users.map((user) => [user.id, emptyTokenTotals()]));
+      const nativeDaily = new Map();
+      for (const record of nativeUsage) {
+        if (!nativeTotals.has(record.user_id)) continue;
+        const values = nativeTotals.get(record.user_id);
+        const dayValues = nativeDaily.get(record.date) || emptyTokenTotals();
+        for (const key of ['requests', 'input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens']) {
+          values[key] = (values[key] || 0) + (Number(record[key]) || 0);
+          dayValues[key] = (dayValues[key] || 0) + (Number(record[key]) || 0);
+        }
+        nativeDaily.set(record.date, dayValues);
+      }
+      totals.clear();
+      for (const [userId, values] of nativeTotals) totals.set(userId, values);
+      daily.clear();
+      for (const [date, values] of nativeDaily) daily.set(date, values);
+    }
     const userRows = users.map((user) => ({ ...user, ...totals.get(user.id) }))
       .sort((a, b) => b.total_tokens - a.total_tokens || b.requests - a.requests || a.username.localeCompare(b.username));
     const allTotals = userRows.reduce((sum, user) => ({
@@ -383,7 +403,8 @@ export class UsageAuditStore {
       total_tokens: sum.total_tokens + user.total_tokens
     }), emptyTokenTotals());
     return {
-      estimated: true,
+      usage_source: usageSource,
+      estimated: usageSource !== 'native',
       period_days: Math.round((now - cutoff) / 86400000),
       generated_at: now,
       summary: {
@@ -408,7 +429,7 @@ export class UsageAuditStore {
 }
 
 function emptyTokenTotals() {
-  return { requests: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+  return { requests: 0, input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0, total_tokens: 0 };
 }
 
 function estimateTokens(content) {
