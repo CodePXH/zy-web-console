@@ -1,0 +1,18 @@
+{
+  "name": "zylos-project-workspaces",
+  "version": "0.2.0+codex.20261112023325",
+  "description": "Zylos Web Console customizations, project-workspace isolation, and upgrade-safe compatibility overlays.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Zylos Console Customizations",
+    "shortDescription": "Preserve custom Web Console and isolated project workspaces across upgrades.",
+    "longDescription": "Owns Zylos Web Console customizations, project-workspace isolation, and a three-way compatibility overlay that can safely reapply local changes after a Zylos Core upgrade.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Help me maintain the Zylos Console customizations and isolated project workspaces."
+  }
+}

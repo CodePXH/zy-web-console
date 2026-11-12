@@ -1,0 +1,5 @@
+# Runtime backups created by apply-overrides.mjs
+plugins/zylos-project-workspaces/backups/
+
+# Local editor and operating-system metadata
+.DS_Store

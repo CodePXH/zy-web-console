@@ -1,0 +1,20 @@
+{
+  "name": "zy-web-console",
+  "interface": {
+    "displayName": "Zylos Console Customizations"
+  },
+  "plugins": [
+    {
+      "name": "zylos-project-workspaces",
+      "source": {
+        "source": "local",
+        "path": "./plugins/zylos-project-workspaces"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

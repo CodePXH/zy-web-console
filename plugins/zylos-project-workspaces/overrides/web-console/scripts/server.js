@@ -1,0 +1,1038 @@
+#!/usr/bin/env node
+/**
+ * Web Console Server with WebSocket
+ * Provides HTTP API + WebSocket for real-time browser-based Claude communication
+ *
+ * Run with PM2: pm2 start server.js --name web-console
+ * Default port: 3456
+ */
+
+import express from 'express';
+import http from 'http';
+import { WebSocketServer } from 'ws';
+import multer from 'multer';
+import crypto from 'crypto';
+import path from 'path';
+import os from 'os';
+import fs from 'fs';
+import { spawn, spawnSync } from 'child_process';
+import Database from 'better-sqlite3';
+import { fileURLToPath } from 'url';
+import {
+  MAX_ATTACHMENTS,
+  buildAnnotatedContent,
+  classifyConversationMessage,
+  contentDisposition,
+  generateStoredFileName,
+  parseMediaContent,
+  resolveAllowedPathSync,
+  sanitizeDisplayName,
+  sniffImage,
+  splitContentAndAttachments,
+  uploadKind
+} from './attachment-utils.js';
+import { openDb, SessionStore, PersistentUploadRegistry, UserStore } from './db.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
+const PORT = process.env.WEB_CONSOLE_PORT || 3456;
+
+// Paths
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+const SKILLS_DIR = process.env.WEB_CONSOLE_SKILLS_DIR || path.join(os.homedir(), 'zylos', '.claude', 'skills');
+const DB_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
+const DB_PATH = path.join(DB_DIR, 'c4.db');
+const STATUS_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'agent-status.json');
+const CODEX_CONFIG_FILE = path.join(os.homedir(), '.codex', 'config.toml');
+const MEDIA_DIR = path.join(ZYLOS_DIR, 'web-console', 'media');
+const PROJECT_WORKSPACE_ROOT = path.join(ZYLOS_DIR, 'workspace', 'web-console-projects');
+const MAX_UPLOAD_MB = Number.parseInt(process.env.WEB_CONSOLE_MAX_UPLOAD_MB || '20', 10);
+const MAX_UPLOAD_BYTES = Math.max(1, MAX_UPLOAD_MB) * 1024 * 1024;
+const C4_SCRIPT_DIR = path.join(SKILLS_DIR, 'comm-bridge', 'scripts');
+
+// Paths - __dirname is scripts/, public/ is one level up
+const SKILL_ROOT = path.join(__dirname, '..');
+
+// --- Authentication ---
+import { parse as parseDotenv } from 'dotenv';
+
+function readEnv() {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    return parseDotenv(fs.readFileSync(envPath, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+const ENV = readEnv();
+
+const wcDb = openDb();
+const sessionStore = new SessionStore(wcDb);
+const userStore = new UserStore(wcDb);
+const uploadRegistry = new PersistentUploadRegistry(wcDb);
+
+wcDb.exec(`
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    workspace_path TEXT,
+    runner_session TEXT,
+    runner_status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_projects_owner_updated ON projects(owner_id, updated_at DESC);
+  CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    project_id TEXT,
+    title TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_conversations_owner_updated ON conversations(owner_id, updated_at DESC);
+`);
+const projectColumns = wcDb.prepare("PRAGMA table_info(projects)").all().map((column) => column.name);
+if (!projectColumns.includes('workspace_path')) wcDb.exec('ALTER TABLE projects ADD COLUMN workspace_path TEXT');
+if (!projectColumns.includes('runner_session')) wcDb.exec('ALTER TABLE projects ADD COLUMN runner_session TEXT');
+if (!projectColumns.includes('runner_status')) wcDb.exec("ALTER TABLE projects ADD COLUMN runner_status TEXT NOT NULL DEFAULT 'pending'");
+const conversationColumns = wcDb.prepare("PRAGMA table_info(conversations)").all().map((column) => column.name);
+if (!conversationColumns.includes('project_id')) wcDb.exec('ALTER TABLE conversations ADD COLUMN project_id TEXT');
+const legacyOwners = wcDb.prepare('SELECT DISTINCT owner_id FROM conversations WHERE project_id IS NULL').all();
+for (const { owner_id: ownerId } of legacyOwners) {
+  const projectId = crypto.randomUUID();
+  const now = Date.now();
+  wcDb.prepare('INSERT INTO projects (id, owner_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(projectId, ownerId, 'Legacy conversations', now, now);
+  wcDb.prepare('UPDATE conversations SET project_id = ? WHERE owner_id = ? AND project_id IS NULL').run(projectId, ownerId);
+}
+wcDb.exec('CREATE INDEX IF NOT EXISTS idx_conversations_project_updated ON conversations(project_id, updated_at DESC)');
+
+// Preserve access on upgrade: the existing console password becomes the initial admin password.
+if (userStore.count() === 0) {
+  const legacyPassword = ENV.ZYLOS_WEB_PASSWORD || ENV.WEB_CONSOLE_PASSWORD || '';
+  if (!legacyPassword) throw new Error('Web Console needs ZYLOS_WEB_PASSWORD to create the initial administrator');
+  userStore.create({ username: ENV.WEB_CONSOLE_ADMIN_USERNAME || 'admin', password: legacyPassword, role: 'admin' });
+}
+
+fs.mkdirSync(MEDIA_DIR, { recursive: true });
+fs.mkdirSync(PROJECT_WORKSPACE_ROOT, { recursive: true });
+
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  if (!cookieHeader) return cookies;
+  for (const pair of cookieHeader.split(';')) {
+    const [name, ...rest] = pair.trim().split('=');
+    if (name) cookies[name] = rest.join('=');
+  }
+  return cookies;
+}
+
+function isAuthenticated(req) {
+  const cookies = parseCookies(req.headers.cookie);
+  if (!cookies.wc_session || !sessionStore.has(cookies.wc_session)) return false;
+  const session = sessionStore.get(cookies.wc_session);
+  if (!session?.user_id || !userStore.get(session.user_id)) return false;
+  sessionStore.touch(cookies.wc_session);
+  return true;
+}
+
+function getIdentity(req) {
+  const cookies = parseCookies(req.headers.cookie);
+  if (!cookies.wc_session) return null;
+  const session = sessionStore.get(cookies.wc_session);
+  if (!session?.user_id) return null;
+  const user = userStore.get(session.user_id);
+  return user ? { sessionId: cookies.wc_session, user } : null;
+}
+
+function authMiddleware(req, res, next) {
+  // Auth endpoints are always accessible
+  if (req.path === '/auth') return next();
+  if (!isAuthenticated(req)) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  next();
+}
+
+// Middleware
+app.use(express.json());
+app.use(express.static(path.join(SKILL_ROOT, 'public')));
+app.use('/api', authMiddleware);
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, MEDIA_DIR),
+    filename: (_req, file, cb) => cb(null, generateStoredFileName(file.originalname))
+  }),
+  limits: {
+    fileSize: MAX_UPLOAD_BYTES,
+    files: 1
+  }
+});
+
+// Initialize database connection
+let db;
+try {
+  // Verify database file exists
+  if (!fs.existsSync(DB_PATH)) {
+    console.error(`Database not found: ${DB_PATH}`);
+    console.error('Make sure comm-bridge is initialized first (run c4-db.js init)');
+    process.exit(1);
+  }
+
+  db = new Database(DB_PATH, { readonly: false });
+
+  // Verify schema exists
+  const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'").get();
+  if (!tableCheck) {
+    console.error('Database schema not initialized');
+    console.error('Run: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js init');
+    process.exit(1);
+  }
+} catch (err) {
+  console.error(`Failed to open database: ${err.message}`);
+  console.error('Make sure comm-bridge is initialized first');
+  process.exit(1);
+}
+
+// Track connected WebSocket clients
+const clients = new Set();
+
+// Last known state for change detection
+let lastStatus = null;
+let lastMessageId = 0;
+
+function readModelInfo() {
+  try {
+    const config = fs.readFileSync(CODEX_CONFIG_FILE, 'utf8');
+    const model = config.match(/^\s*model\s*=\s*"([^"]+)"/m)?.[1];
+    const reasoningEffort = config.match(/^\s*model_reasoning_effort\s*=\s*"([^"]+)"/m)?.[1];
+    return { model: model || 'Not configured', reasoningEffort: reasoningEffort || 'Default' };
+  } catch {
+    return { model: 'Unavailable', reasoningEffort: 'Unavailable' };
+  }
+}
+
+/**
+ * Read current Claude status together with the configured Codex model.
+ */
+function readStatus() {
+  try {
+    if (fs.existsSync(STATUS_FILE)) {
+      return { ...JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8')), modelInfo: readModelInfo() };
+    }
+    return { state: 'unknown', message: 'Status file not found', modelInfo: readModelInfo() };
+  } catch (err) {
+    return { state: 'error', message: err.message, modelInfo: readModelInfo() };
+  }
+}
+
+/**
+ * Strip internal routing info from message content for display
+ */
+function stripReplyVia(content) {
+  // Remove "---- reply via: ..." suffix
+  const idx = content.indexOf(' ---- reply via:');
+  if (idx !== -1) {
+    return content.substring(0, idx);
+  }
+  return content;
+}
+
+/**
+ * Clean message for display (strip internal routing info)
+ */
+function cleanMessageForDisplay(msg, conversation = null) {
+  const cleaned = {
+    ...msg,
+    content: stripReplyVia(msg.content)
+  };
+  const classified = classifyConversationMessage(cleaned);
+  if (classified.kind === 'media') return classified;
+  if (cleaned.direction === 'in') {
+    const parsed = splitContentAndAttachments(cleaned.content);
+    if (parsed.attachments.length > 0) {
+      return {
+        ...cleaned,
+        content: parsed.content,
+        attachments: parsed.attachments.map((attachment) => {
+          const result = {
+            kind: attachment.kind,
+            name: attachment.name,
+            size_label: attachment.sizeLabel
+          };
+          const basename = path.basename(attachment.path || '');
+          if (conversation && basename && attachment.path === path.join(MEDIA_DIR, basename)) {
+            result.href = `/api/inbound-media/${encodeURIComponent(basename)}?project_id=${encodeURIComponent(conversation.project_id)}&conversation_id=${encodeURIComponent(conversation.id)}`;
+          }
+          return result;
+        })
+      };
+    }
+  }
+  return cleaned;
+}
+
+/**
+ * Get new messages since given ID
+ */
+function endpointFor(conversation) {
+  const project = wcDb.prepare('SELECT id, runner_status FROM projects WHERE id = ? AND owner_id = ?').get(conversation.project_id, conversation.owner_id);
+  if (project?.runner_status === 'running') return `wcp-${project.id}-${conversation.owner_id}-${conversation.id}`;
+  return `wc-${conversation.owner_id}-${conversation.id}`;
+}
+
+function getConversation(userId, projectId, conversationId) {
+  return wcDb.prepare('SELECT * FROM conversations WHERE id = ? AND owner_id = ? AND project_id = ?').get(conversationId, userId, projectId) || null;
+}
+
+function createConversation(userId, projectId, title = 'New conversation') {
+  const conversation = { id: crypto.randomUUID(), owner_id: userId, project_id: projectId, title: String(title).trim().slice(0, 80) || 'New conversation', created_at: Date.now(), updated_at: Date.now() };
+  wcDb.prepare('INSERT INTO conversations (id, owner_id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(conversation.id, conversation.owner_id, conversation.project_id, conversation.title, conversation.created_at, conversation.updated_at);
+  return conversation;
+}
+
+function getProject(userId, projectId) {
+  return wcDb.prepare('SELECT * FROM projects WHERE id = ? AND owner_id = ?').get(projectId, userId) || null;
+}
+
+function workspacePathForProject(ownerId, projectId) {
+  return path.join(PROJECT_WORKSPACE_ROOT, ownerId, projectId);
+}
+
+function ensureProjectWorkspace(project) {
+  const workspacePath = project.workspace_path || workspacePathForProject(project.owner_id, project.id);
+  const root = path.resolve(PROJECT_WORKSPACE_ROOT);
+  const resolved = path.resolve(workspacePath);
+  if (!resolved.startsWith(`${root}${path.sep}`)) throw new Error('Invalid project workspace path');
+  fs.mkdirSync(resolved, { recursive: true });
+  if (project.workspace_path !== resolved) {
+    wcDb.prepare('UPDATE projects SET workspace_path = ? WHERE id = ? AND owner_id = ?').run(resolved, project.id, project.owner_id);
+    project.workspace_path = resolved;
+  }
+  return project;
+}
+
+function projectRunnerSession(project) {
+  return `codex-project-${project.id}`;
+}
+
+function startProjectRunner(project) {
+  const session = project.runner_session || projectRunnerSession(project);
+  const workspacePath = ensureProjectWorkspace(project).workspace_path;
+  const exists = spawnSync('tmux', ['has-session', '-t', session], { stdio: 'ignore' }).status === 0;
+  if (!exists) {
+    const runnerPath = '/home/zylos-cm/.nvm/versions/node/v22.22.3/bin:/usr/local/bin:/usr/bin:/bin';
+    const launched = spawnSync('tmux', ['new-session', '-d', '-s', session, '-c', workspacePath, `exec env -u CODEX_CI PATH=${JSON.stringify(runnerPath)} codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen`], { stdio: 'ignore' });
+    if (launched.status !== 0) {
+      wcDb.prepare("UPDATE projects SET runner_session = ?, runner_status = 'failed' WHERE id = ? AND owner_id = ?").run(session, project.id, project.owner_id);
+      return { ...project, runner_session: session, runner_status: 'failed' };
+    }
+    // A fresh Codex workspace asks once whether to trust its local contents.
+    // Project directories are created by this service and contain no user-supplied
+    // bootstrap code, so accepting the initial prompt is safe and prevents the
+    // first routed message from being stuck behind it.
+    const confirmTrust = setTimeout(() => {
+      spawnSync('tmux', ['send-keys', '-t', session, 'Enter'], { stdio: 'ignore' });
+    }, 750);
+    confirmTrust.unref();
+    spawnSync('tmux', ['set-option', '-t', session, 'remain-on-exit', 'on'], { stdio: 'ignore' });
+  }
+  wcDb.prepare("UPDATE projects SET runner_session = ?, runner_status = 'running' WHERE id = ? AND owner_id = ?").run(session, project.id, project.owner_id);
+  return { ...project, runner_session: session, runner_status: 'running' };
+}
+
+function createProject(userId, title = 'New project') {
+  const project = { id: crypto.randomUUID(), owner_id: userId, title: String(title).trim().slice(0, 80) || 'New project', created_at: Date.now(), updated_at: Date.now() };
+  project.workspace_path = workspacePathForProject(project.owner_id, project.id);
+  wcDb.prepare('INSERT INTO projects (id, owner_id, title, workspace_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(project.id, project.owner_id, project.title, project.workspace_path, project.created_at, project.updated_at);
+  return startProjectRunner(project);
+}
+
+function deleteProject(userId, projectId) {
+  const project = getProject(userId, projectId);
+  if (!project) return false;
+
+  // Delete only the canonical owner/project directory, never a path persisted
+  // in the database, so a project cannot reach outside the workspace root.
+  const root = path.resolve(PROJECT_WORKSPACE_ROOT);
+  const workspacePath = path.resolve(workspacePathForProject(project.owner_id, project.id));
+  if (!workspacePath.startsWith(`${root}${path.sep}`)) throw new Error('Invalid project workspace path');
+
+  // Stop the project's own runner before its working directory is removed.
+  spawnSync('tmux', ['kill-session', '-t', projectRunnerSession(project)], { stdio: 'ignore' });
+  fs.rmSync(workspacePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+
+  wcDb.transaction(() => {
+    wcDb.prepare('DELETE FROM conversations WHERE project_id = ? AND owner_id = ?').run(project.id, project.owner_id);
+    wcDb.prepare('DELETE FROM projects WHERE id = ? AND owner_id = ?').run(project.id, project.owner_id);
+  })();
+  return true;
+}
+
+function titleFromFirstMessage(content) {
+  const text = String(content || '').replace(/\s+/g, ' ').trim();
+  if (!text) return 'New conversation';
+  return text.length > 48 ? `${text.slice(0, 48)}…` : text;
+}
+
+function getOrCreateConversation(userId, projectId) {
+  const existing = wcDb.prepare('SELECT * FROM conversations WHERE owner_id = ? AND project_id = ? ORDER BY updated_at DESC LIMIT 1').get(userId, projectId);
+  return existing || createConversation(userId, projectId);
+}
+
+function getNewMessages(sinceId, endpoint, conversation) {
+  try {
+    const stmt = db.prepare(`
+      SELECT id, direction, channel, endpoint_id, content, timestamp
+      FROM conversations
+      WHERE channel = 'web-console' AND endpoint_id = ? AND id > ?
+      ORDER BY timestamp ASC
+    `);
+    return stmt.all(endpoint, sinceId).map((message) => cleanMessageForDisplay(message, conversation));
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Broadcast message to all connected clients
+ */
+function broadcast(type, data, predicate = () => true) {
+  const message = JSON.stringify({ type, data });
+  for (const client of clients) {
+    if (client.ws.readyState === 1 && predicate(client)) {
+      client.ws.send(message);
+    }
+  }
+}
+
+function normalizeAttachmentIds(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((id) => typeof id === 'string' && id.length > 0);
+}
+
+function validateSendPayload(content, attachmentIds) {
+  if (attachmentIds.length > MAX_ATTACHMENTS) {
+    const err = new Error(`Maximum ${MAX_ATTACHMENTS} attachments per message`);
+    err.status = 400;
+    err.code = 'too_many_attachments';
+    throw err;
+  }
+
+  if (!String(content || '').trim() && attachmentIds.length === 0) {
+    const err = new Error('Message is required');
+    err.status = 400;
+    err.code = 'message_required';
+    throw err;
+  }
+}
+
+function buildSendContent(content, attachmentEntries) {
+  const message = buildAnnotatedContent(content, attachmentEntries);
+  if (!message.trim()) {
+    const err = new Error('Message is required');
+    err.status = 400;
+    err.code = 'message_required';
+    throw err;
+  }
+  return message;
+}
+
+function sendToC4(content, endpoint) {
+  const c4Receive = path.join(C4_SCRIPT_DIR, 'c4-receive.js');
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      c4Receive,
+      '--channel', 'web-console',
+      '--endpoint', endpoint,
+      '--content', content
+    ], { stdio: 'pipe' });
+
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data; });
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        const err = new Error(stderr || 'Failed to send message');
+        err.status = 500;
+        err.code = 'send_failed';
+        reject(err);
+      }
+    });
+    child.on('error', (err) => {
+      err.status = 500;
+      err.code = 'send_failed';
+      reject(err);
+    });
+  });
+}
+
+async function sendConsoleMessage({ content, attachmentIds, sessionId, userId, conversation }) {
+  const ids = normalizeAttachmentIds(attachmentIds);
+  validateSendPayload(content, ids);
+
+  let attachmentEntries = [];
+  if (ids.length > 0) {
+    attachmentEntries = uploadRegistry.getMany(ids, sessionId, userId);
+    if (attachmentEntries.length !== ids.length) {
+      const err = new Error('Attachment upload id is invalid or expired');
+      err.status = 400;
+      err.code = 'invalid_attachment';
+      throw err;
+    }
+  }
+
+  const combined = buildSendContent(content, attachmentEntries);
+  if (ids.length > 0) {
+    attachmentEntries = uploadRegistry.consumeMany(ids, sessionId, userId, conversation.id);
+    if (!attachmentEntries) {
+      const err = new Error('Attachment upload id is invalid or expired');
+      err.status = 400;
+      err.code = 'invalid_attachment';
+      throw err;
+    }
+  }
+  try {
+    await sendToC4(combined, endpointFor(conversation));
+  } catch (err) {
+    uploadRegistry.restoreMany(attachmentEntries);
+    throw err;
+  }
+  wcDb.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(Date.now(), conversation.id);
+  if (conversation.title === 'New conversation') {
+    wcDb.prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?')
+      .run(titleFromFirstMessage(content), Date.now(), conversation.id);
+  }
+  return {
+    content: combined,
+    attachments: attachmentEntries.map((entry) => ({
+      kind: entry.kind,
+      name: entry.name,
+      size_label: entry.sizeLabel || null
+    }))
+  };
+}
+
+function jsonError(res, err) {
+  return res.status(err.status || 500).json({
+    success: false,
+    error: err.code || err.message || 'request_failed',
+    message: err.message
+  });
+}
+
+function getMediaRow(messageId, endpoint) {
+  const row = db.prepare(`
+    SELECT id, direction, channel, endpoint_id, content, timestamp
+    FROM conversations
+    WHERE id = ?
+  `).get(messageId);
+
+  if (!row || row.direction !== 'out' || row.channel !== 'web-console' || row.endpoint_id !== endpoint) {
+    return null;
+  }
+
+  const media = parseMediaContent(row.content);
+  if (!media) return null;
+  return { row, media };
+}
+
+/**
+ * Check for status changes and new messages
+ */
+function checkUpdates() {
+  // Check status changes
+  const currentStatus = readStatus();
+  if (!lastStatus || currentStatus.state !== lastStatus.state || currentStatus.modelInfo?.model !== lastStatus.modelInfo?.model || currentStatus.modelInfo?.reasoningEffort !== lastStatus.modelInfo?.reasoningEffort) {
+    lastStatus = currentStatus;
+    broadcast('status', currentStatus);
+  }
+
+  // Check for new messages
+  const newMessages = (() => {
+    try {
+      return db.prepare(`SELECT id, direction, channel, endpoint_id, content, timestamp FROM conversations WHERE channel = 'web-console' AND id > ? ORDER BY timestamp ASC`).all(lastMessageId);
+    } catch { return []; }
+  })();
+  if (newMessages.length > 0) {
+    lastMessageId = Math.max(...newMessages.map(m => m.id));
+    for (const client of clients) {
+      const scoped = newMessages
+        .filter((message) => message.endpoint_id === client.endpoint)
+        .map((message) => cleanMessageForDisplay(message, client.conversation));
+      if (scoped.length > 0) broadcast('messages', scoped, (candidate) => candidate === client);
+    }
+  }
+}
+
+// Start update checker (every 500ms for responsiveness)
+setInterval(checkUpdates, 500);
+
+// Initialize lastMessageId
+try {
+  const stmt = db.prepare(`SELECT MAX(id) as maxId FROM conversations WHERE channel = 'web-console'`);
+  const result = stmt.get();
+  lastMessageId = result?.maxId || 0;
+} catch (err) {
+  // Ignore
+}
+
+/**
+ * WebSocket connection handler
+ */
+wss.on('connection', (ws, req) => {
+  if (!isAuthenticated(req)) {
+    ws.close(4001, 'Authentication required');
+    return;
+  }
+
+  const identity = getIdentity(req);
+  const client = { ws, identity, endpoint: null, conversation: null };
+
+  clients.add(client);
+  console.log(`WebSocket client connected (${clients.size} total)`);
+
+  // Send current status immediately
+  const status = readStatus();
+  ws.send(JSON.stringify({ type: 'status', data: status }));
+
+  // Handle client messages
+  ws.on('message', async (data) => {
+    try {
+      const msg = JSON.parse(data);
+
+      if (msg.type === 'send') {
+        const tempId = msg.tempId; // Track client's temp ID
+        try {
+          const conversation = getConversation(identity.user.id, msg.projectId, msg.conversationId);
+          if (!conversation) throw new Error('Conversation not found');
+          await sendConsoleMessage({
+            content: msg.content || '',
+            attachmentIds: msg.attachments,
+            sessionId: identity.sessionId,
+            userId: identity.user.id,
+            conversation
+          });
+          ws.send(JSON.stringify({ type: 'sent', success: true, tempId }));
+        } catch (err) {
+          ws.send(JSON.stringify({
+            type: 'sent',
+            success: false,
+            error: err.code || err.message,
+            message: err.message,
+            tempId
+          }));
+        }
+      }
+      if (msg.type === 'select_conversation') {
+        const conversation = getConversation(identity.user.id, msg.projectId, msg.conversationId);
+        if (!conversation) throw new Error('Conversation not found');
+          client.endpoint = endpointFor(conversation);
+          client.conversation = conversation;
+      }
+    } catch (err) {
+      // Ignore invalid messages
+    }
+  });
+
+  ws.on('close', () => {
+    clients.delete(client);
+    console.log(`WebSocket client disconnected (${clients.size} remaining)`);
+  });
+
+  ws.on('error', (err) => {
+    console.error('WebSocket error:', err.message);
+    clients.delete(client);
+  });
+});
+
+/**
+ * Get Claude status (HTTP fallback)
+ */
+app.get('/api/status', (req, res) => {
+  res.json(readStatus());
+});
+
+/**
+ * Get conversation history
+ */
+app.get('/api/conversations', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const identity = getIdentity(req);
+    const conversation = getConversation(identity.user.id, req.query.project_id, req.query.conversation_id);
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+
+    // channel is caller-controlled; 'void' is the internal record-only
+    // channel (#689) and must never reach a display surface.
+    const stmt = db.prepare(`
+      SELECT id, direction, channel, endpoint_id, content, timestamp
+      FROM conversations
+      WHERE channel = 'web-console' AND endpoint_id = ?
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `);
+
+    const conversations = stmt.all(endpointFor(conversation), limit).map((message) => cleanMessageForDisplay(message, conversation));
+    res.json(conversations.reverse());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get all recent conversations (for display)
+ */
+app.get('/api/conversations/recent', (req, res) => {
+  req.query.conversation_id = req.query.conversation_id || '';
+  return res.redirect(307, `/api/conversations?conversation_id=${encodeURIComponent(req.query.conversation_id)}&limit=${encodeURIComponent(req.query.limit || 100)}`);
+});
+
+/**
+ * Upload one attachment for a later send call
+ */
+app.post('/api/upload', (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({
+          success: false,
+          error: 'upload_too_large',
+          message: `File exceeds ${MAX_UPLOAD_MB}MB limit`
+        });
+      }
+      return res.status(400).json({ success: false, error: 'upload_failed', message: err.message });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'file_required' });
+    }
+
+    const name = sanitizeDisplayName(req.file.originalname, 'attachment');
+    const entry = uploadRegistry.add({
+      sessionId: getIdentity(req).sessionId,
+      userId: getIdentity(req).user.id,
+      path: req.file.path,
+      name,
+      size: req.file.size,
+      sizeLabel: req.file.size < 1024 ? `${req.file.size}B`
+        : req.file.size < 1024 * 1024 ? `${(req.file.size / 1024).toFixed(1)}KB`
+          : `${(req.file.size / (1024 * 1024)).toFixed(1)}MB`,
+      mime: req.file.mimetype || 'application/octet-stream',
+      kind: uploadKind(req.file)
+    });
+
+    return res.json({
+      id: entry.id,
+      name: entry.name,
+      size: entry.size,
+      mime: entry.mime,
+      kind: entry.kind
+    });
+  });
+});
+
+/**
+ * Send message to Claude (HTTP fallback)
+ */
+app.post('/api/send', (req, res) => {
+  const identity = getIdentity(req);
+  const conversation = getConversation(identity.user.id, req.body.projectId, req.body.conversationId);
+  if (!conversation) return res.status(404).json({ success: false, error: 'conversation_not_found' });
+  sendConsoleMessage({
+    content: req.body.message || '',
+    attachmentIds: req.body.attachments,
+    sessionId: identity.sessionId,
+    userId: identity.user.id,
+    conversation
+  }).then(() => {
+    res.json({ success: true, message: 'Message sent to Claude' });
+  }).catch((err) => jsonError(res, err));
+});
+
+app.get('/api/me', (req, res) => {
+  const identity = getIdentity(req);
+  res.json({ user: identity.user });
+});
+
+app.get('/api/projects', (req, res) => {
+  const identity = getIdentity(req);
+  const projects = wcDb.prepare('SELECT * FROM projects WHERE owner_id = ? ORDER BY updated_at DESC').all(identity.user.id)
+    .map(ensureProjectWorkspace)
+    .map((project) => project.runner_status === 'running' ? startProjectRunner(project) : project);
+  res.json(projects.map(({ id, title, created_at, updated_at }) => ({ id, title, created_at, updated_at })));
+});
+
+app.post('/api/projects', (req, res) => {
+  const identity = getIdentity(req);
+  res.status(201).json(createProject(identity.user.id, req.body.title));
+});
+
+app.patch('/api/projects/:id', (req, res) => {
+  const identity = getIdentity(req);
+  const project = getProject(identity.user.id, req.params.id);
+  const title = String(req.body.title || '').trim().slice(0, 80);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!title) return res.status(400).json({ error: 'Project name is required' });
+  const updatedAt = Date.now();
+  wcDb.prepare('UPDATE projects SET title = ?, updated_at = ? WHERE id = ? AND owner_id = ?').run(title, updatedAt, project.id, identity.user.id);
+  res.json({ ...project, title, updated_at: updatedAt });
+});
+
+app.delete('/api/projects/:id', (req, res) => {
+  const identity = getIdentity(req);
+  try {
+    if (!deleteProject(identity.user.id, req.params.id)) return res.status(404).json({ error: 'Project not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Failed to delete project:', err);
+    res.status(500).json({ error: 'Could not delete project' });
+  }
+});
+
+app.get('/api/conversation-list', (req, res) => {
+  const identity = getIdentity(req);
+  const project = getProject(identity.user.id, req.query.project_id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const conversations = wcDb.prepare('SELECT id, title, created_at, updated_at FROM conversations WHERE owner_id = ? AND project_id = ? ORDER BY updated_at DESC').all(identity.user.id, project.id);
+  res.json(conversations);
+});
+
+app.post('/api/conversations', (req, res) => {
+  const identity = getIdentity(req);
+  const project = getProject(identity.user.id, req.body.projectId);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const conversation = createConversation(identity.user.id, project.id, req.body.title);
+  res.status(201).json(conversation);
+});
+
+app.patch('/api/conversations/:id', (req, res) => {
+  const identity = getIdentity(req);
+  const conversation = getConversation(identity.user.id, req.body.projectId, req.params.id);
+  const title = String(req.body.title || '').trim().slice(0, 80);
+  if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+  if (!title) return res.status(400).json({ error: 'Conversation name is required' });
+  wcDb.prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?').run(title, Date.now(), conversation.id);
+  res.json({ ...conversation, title, updated_at: Date.now() });
+});
+
+app.delete('/api/conversations/:id', (req, res) => {
+  const identity = getIdentity(req);
+  const conversation = getConversation(identity.user.id, req.query.project_id, req.params.id);
+  if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+  // C4 messages remain retained for audit; removing this index entry only removes it from this user's workspace.
+  wcDb.prepare('DELETE FROM conversations WHERE id = ? AND owner_id = ?').run(conversation.id, identity.user.id);
+  res.json({ success: true });
+});
+
+function requireAdmin(req, res, next) {
+  const identity = getIdentity(req);
+  if (identity?.user.role !== 'admin') return res.status(403).json({ error: 'Administrator access required' });
+  next();
+}
+
+app.get('/api/users', requireAdmin, (_req, res) => res.json(userStore.list()));
+
+app.post('/api/users', requireAdmin, (req, res) => {
+  try {
+    const user = userStore.create({ username: req.body.username, password: req.body.password, role: req.body.role || 'user' });
+    res.status(201).json(user);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/users/:id', requireAdmin, (req, res) => {
+  try {
+    userStore.disable(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * Serve an outbound media row by message id
+ */
+app.get('/api/media/:messageId', (req, res) => {
+  try {
+    const messageId = Number.parseInt(req.params.messageId, 10);
+    if (!Number.isSafeInteger(messageId)) return res.sendStatus(404);
+
+    const identity = getIdentity(req);
+    const conversation = getConversation(identity.user.id, req.query.project_id, req.query.conversation_id);
+    if (!conversation) return res.sendStatus(404);
+    const result = getMediaRow(messageId, endpointFor(conversation));
+    if (!result) return res.sendStatus(404);
+
+    const allowedPath = resolveAllowedPathSync(result.media.path, [ZYLOS_DIR, '/tmp']);
+    if (!allowedPath) {
+      console.warn(`Blocked web-console media path outside allowlist: ${result.media.path}`);
+      return res.sendStatus(404);
+    }
+
+    let stat;
+    try {
+      stat = fs.statSync(allowedPath);
+    } catch {
+      return res.sendStatus(404);
+    }
+    if (!stat.isFile()) return res.sendStatus(404);
+
+    const fd = fs.openSync(allowedPath, 'r');
+    const head = Buffer.alloc(Math.min(16, stat.size));
+    fs.readSync(fd, head, 0, head.length, 0);
+    fs.closeSync(fd);
+
+    const image = result.media.media_type === 'image' ? sniffImage(head) : null;
+    const disposition = image ? 'inline' : 'attachment';
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', image?.mime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', contentDisposition(disposition, result.media.name));
+    res.sendFile(allowedPath);
+  } catch {
+    res.sendStatus(404);
+  }
+});
+
+/**
+ * Serve a user-uploaded inbound media file by filename
+ */
+app.get('/api/inbound-media/:filename', (req, res) => {
+  try {
+    const identity = getIdentity(req);
+    const conversation = getConversation(identity.user.id, req.query.project_id, req.query.conversation_id);
+    if (!conversation) return res.sendStatus(404);
+    const filename = path.basename(req.params.filename);
+    if (!filename || filename === '.' || filename === '..') return res.sendStatus(404);
+    const target = path.join(MEDIA_DIR, filename);
+
+    const allowedPath = resolveAllowedPathSync(target, [MEDIA_DIR]);
+    if (!allowedPath || !uploadRegistry.isAccessible(allowedPath, identity.user.id, conversation.id)) return res.sendStatus(404);
+
+    let stat;
+    try {
+      stat = fs.statSync(allowedPath);
+    } catch {
+      return res.sendStatus(404);
+    }
+    if (!stat.isFile()) return res.sendStatus(404);
+
+    const fd = fs.openSync(allowedPath, 'r');
+    const head = Buffer.alloc(Math.min(16, stat.size));
+    fs.readSync(fd, head, 0, head.length, 0);
+    fs.closeSync(fd);
+
+    const image = sniffImage(head);
+    const disposition = image ? 'inline' : 'attachment';
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', image?.mime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', contentDisposition(disposition, filename));
+    res.sendFile(allowedPath);
+  } catch {
+    res.sendStatus(404);
+  }
+});
+
+/**
+ * Poll for new messages since given ID (HTTP fallback)
+ */
+app.get('/api/poll', (req, res) => {
+  try {
+    const sinceId = parseInt(req.query.since_id) || 0;
+    const identity = getIdentity(req);
+    const conversation = getConversation(identity.user.id, req.query.project_id, req.query.conversation_id);
+    if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+    res.json(getNewMessages(sinceId, endpointFor(conversation), conversation));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Check auth status
+ */
+app.get('/api/auth', (req, res) => {
+  const identity = isAuthenticated(req) ? getIdentity(req) : null;
+  res.json({
+    required: true,
+    authenticated: Boolean(identity),
+    timezone: ENV.TZ || null,
+    user: identity?.user || null
+  });
+});
+
+/**
+ * Login
+ */
+app.post('/api/auth', (req, res) => {
+  const { username, password, remember } = req.body;
+  const user = userStore.authenticate(username, password);
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'Incorrect username or password' });
+  }
+
+  const token = sessionStore.create(user.id);
+  const maxAge = remember !== false ? `; Max-Age=${sessionStore.maxAgeSec}` : '';
+  res.setHeader('Set-Cookie', `wc_session=${token}; Path=/; HttpOnly; SameSite=Strict${maxAge}`);
+  res.json({ success: true, timezone: ENV.TZ || null, user });
+});
+
+/**
+ * Logout
+ */
+app.post('/api/logout', (req, res) => {
+  const cookies = parseCookies(req.headers.cookie);
+  if (cookies.wc_session) sessionStore.delete(cookies.wc_session);
+  res.setHeader('Set-Cookie', 'wc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+  res.json({ success: true });
+});
+
+/**
+ * Health check
+ */
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    websocket_clients: clients.size
+  });
+});
+
+// Serve index.html for root
+app.get('/', (req, res) => {
+  res.sendFile(path.join(SKILL_ROOT, 'public', 'index.html'));
+});
+
+// Start server (bind to localhost only for security)
+const BIND_HOST = process.env.WEB_CONSOLE_BIND || '127.0.0.1';
+server.listen(PORT, BIND_HOST, () => {
+  console.log(`Web Console server running on http://${BIND_HOST}:${PORT}`);
+  console.log(`WebSocket available at ws://${BIND_HOST}:${PORT}`);
+  console.log('Authentication: multi-user enabled');
+  console.log(`Database: ${DB_PATH}`);
+});
+
+// Graceful shutdown
+function shutdown() {
+  console.log('Shutting down...');
+  wss.close();
+  if (db) db.close();
+  if (wcDb) wcDb.close();
+  process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
