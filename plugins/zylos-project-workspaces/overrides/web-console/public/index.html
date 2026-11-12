@@ -14,12 +14,13 @@
         <img src="logo.png" alt="Zylos">
       </div>
       <h1>Zylos Console</h1>
-      <p>Sign in to your private workspace</p>
+      <button class="language-toggle login-language-toggle" id="login-language-toggle" type="button" aria-label="Switch language">中文</button>
+      <p data-i18n="loginHint">Sign in to your private workspace</p>
       <form id="login-form">
-        <input type="text" id="login-username" placeholder="Username" autocomplete="username" autofocus>
-        <input type="password" id="login-password" placeholder="Password" autocomplete="current-password">
-        <label class="remember-me"><input type="checkbox" id="login-remember" checked> Remember me</label>
-        <button type="submit">Login</button>
+        <input type="text" id="login-username" placeholder="Username" data-i18n-placeholder="username" autocomplete="username" autofocus>
+        <input type="password" id="login-password" placeholder="Password" data-i18n-placeholder="password" autocomplete="current-password">
+        <label class="remember-me"><input type="checkbox" id="login-remember" checked> <span data-i18n="remember">Remember me</span></label>
+        <button type="submit" data-i18n="login">Login</button>
         <div class="login-error" id="login-error"></div>
       </form>
     </div>
@@ -28,15 +29,15 @@
   <!-- Chat Screen -->
   <div class="container" id="chat-screen" style="display:none">
     <aside class="sidebar" id="sidebar">
-      <button class="new-chat-btn" id="new-project-btn">+ New project</button>
+      <button class="new-chat-btn" id="new-project-btn" data-i18n="newProject">+ New project</button>
       <div class="project-list" id="project-list"></div>
       <div class="sidebar-footer">
         <span id="current-user"></span>
-        <button class="account-btn" id="guide-btn" style="display:none">Skills &amp; guide</button>
-        <button class="account-btn" id="usage-btn" style="display:none">My usage</button>
-        <button class="account-btn" id="dashboard-btn" style="display:none">Operations dashboard</button>
-        <button class="account-btn" id="audit-btn" style="display:none">Usage audit</button>
-        <button class="account-btn" id="account-btn" style="display:none">Manage accounts</button>
+        <button class="account-btn" id="guide-btn" style="display:none" data-i18n="skillsGuide">Skills &amp; guide</button>
+        <button class="account-btn" id="usage-btn" style="display:none" data-i18n="myUsage">My usage</button>
+        <button class="account-btn" id="dashboard-btn" style="display:none" data-i18n="dashboard">Operations dashboard</button>
+        <button class="account-btn" id="audit-btn" style="display:none" data-i18n="usageAudit">Usage audit</button>
+        <button class="account-btn" id="account-btn" style="display:none" data-i18n="manageAccounts">Manage accounts</button>
       </div>
     </aside>
     <header>
@@ -46,7 +47,7 @@
       </div>
       <div class="header-right">
         <div class="model-info" id="model-info" title="Configured Codex model and reasoning effort" aria-label="Configured Codex model">
-          <span class="model-info-label">Model</span>
+          <span class="model-info-label" data-i18n="model">Model</span>
           <span class="model-info-value">Loading…</span>
         </div>
         <div class="status" id="status">
@@ -60,6 +61,7 @@
             <line x1="21" y1="12" x2="9" y2="12"></line>
           </svg>
         </button>
+        <button class="language-toggle" id="language-toggle" type="button" aria-label="Switch language">中文</button>
       </div>
     </header>
 
@@ -81,7 +83,7 @@
         <input type="file" id="file-input" multiple hidden>
         <textarea
           id="message-input"
-          placeholder="Type your message..."
+          placeholder="Type your message..." data-i18n-placeholder="messagePlaceholder"
           rows="1"
           autofocus
         ></textarea>
@@ -97,7 +99,7 @@
 
   <div class="modal-backdrop" id="account-modal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
-      <div class="modal-header"><h2 id="account-modal-title">Account management</h2><button id="close-account-modal" class="modal-close" aria-label="Close">×</button></div>
+    <div class="modal-header"><h2 id="account-modal-title" data-i18n="accountManagement">Account management</h2><button id="close-account-modal" class="modal-close" aria-label="Close">×</button></div>
       <form id="create-user-form" class="create-user-form">
         <input id="new-username" placeholder="Username" required>
         <input id="new-password" type="password" placeholder="Password (at least 10 characters)" required>
@@ -113,25 +115,25 @@
     <div class="modal usage-modal" role="dialog" aria-modal="true" aria-labelledby="usage-modal-title">
       <div class="modal-header"><h2 id="usage-modal-title">My usage</h2><button id="close-usage-modal" class="modal-close" aria-label="Close">×</button></div>
       <div id="usage-summary" class="usage-summary"></div>
-      <h3 class="usage-heading">Recent activity</h3>
+      <h3 class="usage-heading" data-i18n="recentActivity">Recent activity</h3>
       <div id="usage-events" class="usage-events"></div>
     </div>
   </div>
 
   <div class="modal-backdrop" id="guide-modal" hidden>
     <div class="modal guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-modal-title">
-      <div class="modal-header"><h2 id="guide-modal-title">Skills &amp; guide</h2><button id="close-guide-modal" class="modal-close" aria-label="Close">×</button></div>
-      <p class="guide-intro">Skills are used automatically when your request matches them. You can simply describe your goal in the chat; the examples below are ready to copy and adapt.</p>
+    <div class="modal-header"><h2 id="guide-modal-title" data-i18n="skillsGuideTitle">Skills &amp; guide</h2><button id="close-guide-modal" class="modal-close" aria-label="Close">×</button></div>
+    <p class="guide-intro" data-i18n="guideIntro">Skills are used automatically when your request matches them. You can simply describe your goal in the chat; the examples below are ready to copy and adapt.</p>
       <div id="guide-list" class="guide-list"></div>
     </div>
   </div>
 
   <div class="modal-backdrop" id="audit-modal" hidden>
     <div class="modal audit-modal" role="dialog" aria-modal="true" aria-labelledby="audit-modal-title">
-      <div class="modal-header"><h2 id="audit-modal-title">User usage audit</h2><button id="close-audit-modal" class="modal-close" aria-label="Close">×</button></div>
-      <label class="audit-filter">User <select id="audit-user-filter"><option value="">All users</option></select></label>
+    <div class="modal-header"><h2 id="audit-modal-title" data-i18n="usageAudit">User usage audit</h2><button id="close-audit-modal" class="modal-close" aria-label="Close">×</button></div>
+    <label class="audit-filter"><span data-i18n="user">User</span> <select id="audit-user-filter"><option value="">All users</option></select></label>
       <div id="audit-user-summary" class="audit-user-summary"></div>
-      <h3 class="usage-heading">Recent activity</h3>
+      <h3 class="usage-heading" data-i18n="recentActivity">Recent activity</h3>
       <div id="audit-events" class="usage-events"></div>
     </div>
   </div>
@@ -139,22 +141,23 @@
   <div class="modal-backdrop" id="dashboard-modal" hidden>
     <div class="modal dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="dashboard-modal-title">
       <div class="modal-header">
-        <div><h2 id="dashboard-modal-title">Operations dashboard</h2><p class="dashboard-subtitle">Last 14 days · Token values are estimates</p></div>
+        <div><h2 id="dashboard-modal-title" data-i18n="dashboard">Operations dashboard</h2><p class="dashboard-subtitle">Last 14 days · Token values are estimates</p></div>
         <button id="close-dashboard-modal" class="modal-close" aria-label="Close">×</button>
       </div>
       <div id="dashboard-summary" class="dashboard-summary"></div>
       <section class="dashboard-section">
-        <div class="dashboard-section-heading"><h3>Token trend <small class="dashboard-legend"><i></i><span id="dashboard-legend-label">Estimated tokens</span></small></h3><span id="dashboard-period"></span></div>
+        <div class="dashboard-section-heading"><h3 data-i18n="tokenTrend">Token trend</h3><small class="dashboard-legend"><i></i><span id="dashboard-legend-label">Estimated tokens</span></small><span id="dashboard-period"></span></div>
         <div id="dashboard-trend" class="dashboard-trend" aria-label="Estimated token usage trend"></div>
       </section>
       <section class="dashboard-section dashboard-grid">
-        <div class="dashboard-panel"><div class="dashboard-section-heading"><h3>User token ranking</h3><span>estimated</span></div><div id="dashboard-users" class="dashboard-users"></div></div>
-        <div class="dashboard-panel"><div class="dashboard-section-heading"><h3>Monitoring overview</h3><span>all time</span></div><div id="dashboard-monitoring" class="dashboard-monitoring"></div></div>
+        <div class="dashboard-panel"><div class="dashboard-section-heading"><h3 data-i18n="userTokenRanking">User token ranking</h3><span data-i18n="estimatedTokens">estimated</span></div><div id="dashboard-users" class="dashboard-users"></div></div>
+        <div class="dashboard-panel"><div class="dashboard-section-heading"><h3 data-i18n="monitoringOverview">Monitoring overview</h3><span data-i18n="allTime">all time</span></div><div id="dashboard-monitoring" class="dashboard-monitoring"></div></div>
       </section>
     </div>
   </div>
 
   <script src="markdown-it.min.js"></script>
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

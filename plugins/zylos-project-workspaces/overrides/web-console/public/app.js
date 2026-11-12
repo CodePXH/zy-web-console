@@ -26,11 +26,16 @@ class ZylosConsole {
     this.user = user || null;
     this.awaitingResponses = this.restoreAwaitingResponses();
     this.agentState = 'unknown';
+    this.lastStatus = null;
     this.currentConversation = null;
     this.currentProject = null;
     this.projects = [];
     this.projectList = document.getElementById('project-list');
     this.newProjectButton = document.getElementById('new-project-btn');
+
+    window.addEventListener('zylos:locale-change', () => {
+      if (this.lastStatus) this.updateStatusDisplay(this.lastStatus);
+    });
 
     // Detect base path for API/WS calls (handles /console/ proxy)
     this.basePath = this.detectBasePath();
@@ -209,7 +214,7 @@ class ZylosConsole {
         await this.loadConversationList();
       });
       const add = document.createElement('button');
-      add.className = 'project-action project-add'; add.textContent = '+'; add.title = `New conversation in ${project.title}`;
+      add.className = 'project-action project-add'; add.textContent = '+'; add.title = t('newConversationIn', { project: project.title });
       add.addEventListener('click', async (event) => {
         event.stopPropagation();
         if (this.currentProject?.id !== project.id) {
@@ -221,10 +226,10 @@ class ZylosConsole {
         await this.createConversation();
       });
       const edit = document.createElement('button');
-      edit.className = 'project-action'; edit.textContent = '✎'; edit.title = 'Rename project';
+      edit.className = 'project-action'; edit.textContent = '✎'; edit.title = t('renameProject');
       edit.addEventListener('click', (event) => { event.stopPropagation(); this.renameProject(project, projects); });
       const remove = document.createElement('button');
-      remove.className = 'project-action delete'; remove.textContent = '×'; remove.title = `Delete ${project.title}`;
+      remove.className = 'project-action delete'; remove.textContent = '×'; remove.title = t('deleteProject', { project: project.title });
       remove.addEventListener('click', (event) => { event.stopPropagation(); this.deleteProject(project); });
       row.append(button, add, edit, remove);
       const conversations = document.createElement('div');
@@ -236,7 +241,7 @@ class ZylosConsole {
   }
 
   async createProject(defaultTitle = null) {
-    const title = defaultTitle || window.prompt('Project name', 'New project');
+    const title = defaultTitle || window.prompt(t('projectName'), t('newProjectName'));
     if (title === null) return;
     try {
       this.saveCurrentDraft();
@@ -249,7 +254,7 @@ class ZylosConsole {
   }
 
   async renameProject(project, projects) {
-    const title = window.prompt('Project name', project.title);
+    const title = window.prompt(t('projectName'), project.title);
     if (title === null) return;
     try {
       const response = await fetch(`${this.basePath}/api/projects/${encodeURIComponent(project.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
@@ -265,7 +270,7 @@ class ZylosConsole {
   }
 
   async deleteProject(project) {
-    if (!window.confirm(`Delete project “${project.title}” and all of its conversations and files? This cannot be undone.`)) return;
+    if (!window.confirm(t('deleteProjectConfirm', { project: project.title }))) return;
     try {
       const response = await fetch(`${this.basePath}/api/projects/${encodeURIComponent(project.id)}`, { method: 'DELETE' });
       const result = await response.json();
@@ -348,10 +353,10 @@ class ZylosConsole {
       button.title = conversation.title;
       button.addEventListener('click', () => this.selectConversation(conversation));
       const edit = document.createElement('button');
-      edit.className = 'conversation-action'; edit.textContent = '✎'; edit.title = 'Rename conversation';
+      edit.className = 'conversation-action'; edit.textContent = '✎'; edit.title = t('renameConversation');
       edit.addEventListener('click', (event) => { event.stopPropagation(); this.renameConversation(conversation); });
       const remove = document.createElement('button');
-      remove.className = 'conversation-action delete'; remove.textContent = '×'; remove.title = 'Delete conversation';
+      remove.className = 'conversation-action delete'; remove.textContent = '×'; remove.title = t('deleteConversation');
       remove.addEventListener('click', (event) => { event.stopPropagation(); this.deleteConversation(conversation); });
       row.append(button, edit, remove);
       list.appendChild(row);
@@ -360,7 +365,7 @@ class ZylosConsole {
 
   async createConversation() {
     try {
-      const response = await fetch(`${this.basePath}/api/conversations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'New conversation', projectId: this.currentProject.id }) });
+      const response = await fetch(`${this.basePath}/api/conversations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: t('newConversation'), projectId: this.currentProject.id }) });
       const conversation = await response.json();
       if (!response.ok) throw new Error(conversation.error || 'Failed to create conversation');
       const listResponse = await fetch(`${this.basePath}/api/conversation-list?project_id=${encodeURIComponent(this.currentProject.id)}`);
@@ -384,7 +389,7 @@ class ZylosConsole {
   }
 
   async renameConversation(conversation) {
-    const title = window.prompt('Conversation name', conversation.title);
+    const title = window.prompt(t('conversationName'), conversation.title);
     if (title === null) return;
     try {
       const response = await fetch(`${this.basePath}/api/conversations/${encodeURIComponent(conversation.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, projectId: this.currentProject.id }) });
@@ -396,7 +401,7 @@ class ZylosConsole {
   }
 
   async deleteConversation(conversation) {
-    if (!window.confirm(`Delete “${conversation.title}” from your workspace? Its messages are retained in the system audit log.`)) return;
+    if (!window.confirm(t('deleteConversationConfirm', { conversation: conversation.title }))) return;
     try {
       const response = await fetch(`${this.basePath}/api/conversations/${encodeURIComponent(conversation.id)}?project_id=${encodeURIComponent(this.currentProject.id)}`, { method: 'DELETE' });
       const result = await response.json();
@@ -469,34 +474,35 @@ class ZylosConsole {
   updateConnectionStatus(connected) {
     if (!connected) {
       this.statusDot.className = 'status-dot offline';
-      this.statusText.textContent = 'Disconnected';
+      this.statusText.textContent = t('disconnected');
     }
   }
 
   updateStatusDisplay(status) {
+    this.lastStatus = status;
     this.statusDot.className = 'status-dot';
     this.agentState = status.state || 'unknown';
     const { model, reasoningEffort } = status.modelInfo || {};
     if (this.modelInfoValue) {
-      this.modelInfoValue.textContent = model ? `${model} · ${reasoningEffort || 'Default'}` : 'Unavailable';
+      this.modelInfoValue.textContent = model ? `${model} · ${reasoningEffort || t('defaultReasoning')}` : t('unavailable');
     }
 
     switch (status.state) {
       case 'busy':
         this.statusDot.classList.add('busy');
-        this.statusText.textContent = 'Claude is busy';
+        this.statusText.textContent = t('busy');
         break;
       case 'idle':
         this.statusDot.classList.add('online');
-        this.statusText.textContent = 'Claude is ready';
+        this.statusText.textContent = t('ready');
         break;
       case 'offline':
       case 'stopped':
         this.statusDot.classList.add('offline');
-        this.statusText.textContent = 'Claude is offline';
+        this.statusText.textContent = t('offline');
         break;
       default:
-        this.statusText.textContent = 'Unknown status';
+        this.statusText.textContent = t('unknownStatus');
     }
   }
 
@@ -550,7 +556,7 @@ class ZylosConsole {
       this.updateStatusDisplay(status);
     } catch (err) {
       this.statusDot.className = 'status-dot offline';
-      this.statusText.textContent = 'Connection error';
+      this.statusText.textContent = t('connectionError');
     }
   }
 
@@ -842,7 +848,7 @@ class ZylosConsole {
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = 'Sending...';
+    meta.textContent = t('sending');
 
     div.appendChild(contentDiv);
     div.appendChild(meta);
@@ -871,7 +877,7 @@ class ZylosConsole {
       msg.classList.remove('sending');
       msg.classList.add('error');
       const meta = msg.querySelector('.meta');
-      if (meta) meta.textContent = 'Failed to send';
+      if (meta) meta.textContent = t('failedToSend');
     }
     this.pendingMessages.delete(tempId);
     this.clearThinkingIndicator(this.currentConversation?.id);
@@ -899,7 +905,7 @@ class ZylosConsole {
       indicator.setAttribute('aria-live', 'polite');
 
       const label = document.createElement('span');
-      label.textContent = 'Zylos is thinking';
+      label.textContent = t('thinking');
       const dots = document.createElement('span');
       dots.className = 'thinking-dots';
       dots.setAttribute('aria-hidden', 'true');
@@ -1112,13 +1118,9 @@ function showLogoutButton(basePath, user) {
 }
 
 const usageEventLabels = {
-  login_success: 'Signed in',
-  project_created: 'Created a project',
-  project_deleted: 'Deleted a project',
-  conversation_created: 'Created a conversation',
-  conversation_deleted: 'Deleted a conversation',
-  message_sent: 'Sent a message',
-  attachment_uploaded: 'Uploaded an attachment'
+  login_success: 'signedIn', project_created: 'projectCreated', project_deleted: 'projectDeleted',
+  conversation_created: 'conversationCreated', conversation_deleted: 'conversationDeleted',
+  message_sent: 'messageSent', attachment_uploaded: 'attachmentUploaded'
 };
 
 function formatUsageTime(timestamp) {
@@ -1135,13 +1137,13 @@ function formatUsageBytes(bytes) {
 function appendUsageEvents(container, events, includeUser = false) {
   container.textContent = '';
   if (!events?.length) {
-    const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = 'No activity recorded yet.'; container.appendChild(empty);
+    const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = t('noActivity'); container.appendChild(empty);
     return;
   }
   events.forEach((event) => {
     const row = document.createElement('div'); row.className = 'usage-event';
     const label = document.createElement('span'); label.className = 'usage-event-label';
-    label.textContent = `${includeUser ? `${event.username} · ` : ''}${usageEventLabels[event.event_type] || event.event_type}`;
+    label.textContent = `${includeUser ? `${event.username} · ` : ''}${t(usageEventLabels[event.event_type] || event.event_type)}`;
     const meta = document.createElement('span'); meta.className = 'usage-event-meta';
     const suffix = event.event_type === 'attachment_uploaded' ? ` · ${formatUsageBytes(event.details?.bytes)}`
       : event.event_type === 'message_sent' ? ` · ${event.details?.attachments || 0} attachment(s)` : '';
@@ -1164,11 +1166,9 @@ function setupUsageMonitoring(basePath, user) {
     if (!response.ok) throw new Error(data.error || 'Could not load usage');
     summary.textContent = '';
     [
-      ['Projects', data.summary.projects],
-      ['Conversations', data.summary.conversations],
-      ['Messages sent', data.summary.messages_sent],
-      ['Attachments', data.summary.attachments_uploaded],
-      ['Uploaded', formatUsageBytes(data.summary.uploaded_bytes)]
+      [t('projects'), data.summary.projects], [t('conversations'), data.summary.conversations],
+      [t('messagesSent'), data.summary.messages_sent], [t('attachments'), data.summary.attachments_uploaded],
+      [t('uploaded'), formatUsageBytes(data.summary.uploaded_bytes)]
     ].forEach(([label, value]) => {
       const card = document.createElement('div'); card.className = 'usage-card';
       const number = document.createElement('span'); number.className = 'usage-value'; number.textContent = value;
@@ -1201,11 +1201,11 @@ function setupSkillsGuide(basePath, user) {
       const header = document.createElement('div'); header.className = 'guide-card-header';
       const title = document.createElement('h3'); title.textContent = capability.title;
       const category = document.createElement('span'); category.className = 'guide-category';
-      category.textContent = capability.connectionRequired ? `${capability.category} · connect first` : capability.category;
+      category.textContent = capability.connectionRequired ? `${capability.category} · ${t('connectFirst')}` : capability.category;
       header.append(title, category);
       const description = document.createElement('p'); description.textContent = capability.description;
       const how = document.createElement('p'); how.className = 'guide-how';
-      const prefix = document.createElement('strong'); prefix.textContent = 'How to use: ';
+      const prefix = document.createElement('strong'); prefix.textContent = `${t('howToUse')} `;
       how.append(prefix, document.createTextNode(capability.how));
       card.append(header, description, how); list.appendChild(card);
     });
@@ -1232,7 +1232,7 @@ function setupUsageAudit(basePath, user) {
     if (!response.ok) throw new Error(data.error || 'Could not load audit');
     const selected = filter.value;
     filter.textContent = '';
-    const all = document.createElement('option'); all.value = ''; all.textContent = 'All users'; filter.appendChild(all);
+    const all = document.createElement('option'); all.value = ''; all.textContent = t('allUsers'); filter.appendChild(all);
     data.users.forEach((account) => {
       const option = document.createElement('option'); option.value = account.id; option.textContent = account.username; filter.appendChild(option);
     });
@@ -1240,7 +1240,7 @@ function setupUsageAudit(basePath, user) {
     summary.textContent = '';
     const table = document.createElement('table');
     const head = document.createElement('thead'); const headerRow = document.createElement('tr');
-    ['User', 'Role', 'Projects', 'Conversations', 'Messages', 'Attachments', 'Last active'].forEach((title) => { const cell = document.createElement('th'); cell.textContent = title; headerRow.appendChild(cell); });
+    ['user', 'role', 'projects', 'conversations', 'messagesSent', 'attachments', 'lastActive'].forEach((key) => { const cell = document.createElement('th'); cell.textContent = t(key); headerRow.appendChild(cell); });
     head.appendChild(headerRow); table.appendChild(head);
     const body = document.createElement('tbody');
     data.users.forEach((account) => {
@@ -1289,19 +1289,19 @@ function setupOperationsDashboard(basePath, user) {
     if (!response.ok) throw new Error(data.error || 'Could not load dashboard');
     const totals = data.summary;
     const native = data.usage_source === 'native';
-    legendLabel.textContent = native ? 'Native usage' : 'Estimated tokens';
+    legendLabel.textContent = native ? t('nativeUsage') : t('estimatedTokens');
     summary.textContent = '';
     [
-      [native ? 'Native tokens' : 'Estimated tokens', formatEstimatedTokens(totals.total_tokens), native ? `Input ${formatEstimatedTokens(totals.input_tokens)} · Cache ${formatEstimatedTokens(totals.cached_input_tokens)} · Output ${formatEstimatedTokens(totals.output_tokens)}` : `Input ${formatEstimatedTokens(totals.input_tokens)} · Output ${formatEstimatedTokens(totals.output_tokens)}`],
-      ['Requests', totals.requests, `${totals.messages_sent} workspace messages logged`],
-      ['Active users', `${totals.active_users} / ${totals.users}`, `In the last ${data.period_days} days`],
-      ['Workspaces', totals.projects, `${totals.conversations} conversations`]
+      [native ? t('nativeTokens') : t('estimatedTokens'), formatEstimatedTokens(totals.total_tokens), native ? `${t('input')} ${formatEstimatedTokens(totals.input_tokens)} · ${t('cache')} ${formatEstimatedTokens(totals.cached_input_tokens)} · ${t('output')} ${formatEstimatedTokens(totals.output_tokens)}` : `${t('input')} ${formatEstimatedTokens(totals.input_tokens)} · ${t('output')} ${formatEstimatedTokens(totals.output_tokens)}`],
+      [t('requests'), totals.requests, `${totals.messages_sent} ${t('messagesSent').toLowerCase()}`],
+      [t('activeUsers'), `${totals.active_users} / ${totals.users}`, t('lastDays', { days: data.period_days })],
+      [t('workspaces'), totals.projects, `${totals.conversations} ${t('conversations').toLowerCase()}`]
     ].forEach(([label, value, hint]) => summary.appendChild(statCard(label, value, hint)));
-    period.textContent = `last ${data.period_days} days`;
+    period.textContent = t('lastDays', { days: data.period_days });
     trend.textContent = '';
     const maxTokens = Math.max(1, ...data.trend.map((entry) => entry.total_tokens));
     if (!data.trend.length) {
-      const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = 'No routed conversation activity in this period.'; trend.appendChild(empty);
+      const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = t('noRoutedActivity'); trend.appendChild(empty);
     } else {
       const svgNs = 'http://www.w3.org/2000/svg';
       const svg = document.createElementNS(svgNs, 'svg'); svg.classList.add('dashboard-line-chart'); svg.setAttribute('viewBox', '0 0 1000 190'); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Token trend for the last 14 days');
@@ -1313,7 +1313,7 @@ function setupOperationsDashboard(basePath, user) {
       const area = document.createElementNS(svgNs, 'path'); area.setAttribute('class', 'chart-area'); area.setAttribute('d', `M ${points[0].x.toFixed(1)} ${top + height} L ${pointText.replaceAll(',', ' ')} L ${points.at(-1).x.toFixed(1)} ${top + height} Z`); svg.appendChild(area);
       const path = document.createElementNS(svgNs, 'polyline'); path.setAttribute('class', 'chart-line'); path.setAttribute('points', pointText); svg.appendChild(path);
       points.forEach(({ entry, x, y }, index) => {
-        if (entry.total_tokens > 0) { const dot = document.createElementNS(svgNs, 'circle'); dot.setAttribute('class', 'chart-dot'); dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', '3.4'); const title = document.createElementNS(svgNs, 'title'); title.textContent = `${entry.date}: ${formatEstimatedTokens(entry.total_tokens)} ${native ? 'native' : 'estimated'} tokens · ${entry.requests} requests`; dot.appendChild(title); svg.appendChild(dot); }
+        if (entry.total_tokens > 0) { const dot = document.createElementNS(svgNs, 'circle'); dot.setAttribute('class', 'chart-dot'); dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', '3.4'); const title = document.createElementNS(svgNs, 'title'); title.textContent = `${entry.date}: ${formatEstimatedTokens(entry.total_tokens)} ${native ? t('nativeUsage') : t('estimatedTokens')} · ${entry.requests} ${t('requests')}`; dot.appendChild(title); svg.appendChild(dot); }
         if (index === 0 || index === data.trend.length - 1 || index % 3 === 0) { const label = document.createElementNS(svgNs, 'text'); label.setAttribute('class', 'chart-axis-label'); label.setAttribute('x', x); label.setAttribute('y', 181); label.setAttribute('text-anchor', index === 0 ? 'start' : index === data.trend.length - 1 ? 'end' : 'middle'); label.textContent = entry.date.slice(5); svg.appendChild(label); }
       });
       const tooltip = document.createElement('div'); tooltip.className = 'chart-tooltip'; tooltip.hidden = true;
@@ -1325,7 +1325,7 @@ function setupOperationsDashboard(basePath, user) {
         const plotWidth = rect.width * width / 1000;
         const ratio = Math.min(1, Math.max(0, (event.clientX - plotLeft) / plotWidth));
         const index = Math.round(ratio * (data.trend.length - 1)); const entry = data.trend[index];
-        tooltip.textContent = `${entry.date} · ${formatEstimatedTokens(entry.total_tokens)} ${native ? 'native' : 'estimated'} tokens · ${entry.requests} requests`;
+        tooltip.textContent = `${entry.date} · ${formatEstimatedTokens(entry.total_tokens)} ${native ? t('nativeUsage') : t('estimatedTokens')} · ${entry.requests} ${t('requests')}`;
         tooltip.hidden = false; tooltip.style.left = `${Math.min(Math.max(event.clientX - rect.left, 84), rect.width - 84)}px`;
       };
       svg.addEventListener('mousemove', showTooltip); svg.addEventListener('mouseenter', showTooltip); svg.addEventListener('mouseleave', () => { tooltip.hidden = true; });
@@ -1334,21 +1334,21 @@ function setupOperationsDashboard(basePath, user) {
     users.textContent = '';
     const maximum = Math.max(1, ...data.users.map((account) => account.total_tokens));
     if (!data.users.length) {
-      const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = 'No active accounts.'; users.appendChild(empty);
+      const empty = document.createElement('p'); empty.className = 'usage-empty'; empty.textContent = t('noActiveAccounts'); users.appendChild(empty);
     } else {
       data.users.forEach((account) => {
         const row = document.createElement('div'); row.className = 'dashboard-user';
         const name = document.createElement('span'); name.className = 'dashboard-user-name'; name.textContent = account.username;
         const track = document.createElement('span'); track.className = 'dashboard-user-track'; const fill = document.createElement('i'); fill.style.width = `${Math.max(0, account.total_tokens / maximum * 100)}%`; track.appendChild(fill);
         const value = document.createElement('span'); value.className = 'dashboard-user-value'; value.textContent = formatEstimatedTokens(account.total_tokens);
-        const meta = document.createElement('span'); meta.className = 'dashboard-user-meta'; meta.textContent = native ? `${account.requests} requests · input ${formatEstimatedTokens(account.input_tokens)} · cache ${formatEstimatedTokens(account.cached_input_tokens)} · output ${formatEstimatedTokens(account.output_tokens)} · reasoning ${formatEstimatedTokens(account.reasoning_output_tokens)}` : `${account.requests} requests · input ${formatEstimatedTokens(account.input_tokens)} · output ${formatEstimatedTokens(account.output_tokens)}`;
+        const meta = document.createElement('span'); meta.className = 'dashboard-user-meta'; meta.textContent = native ? `${account.requests} ${t('requests')} · ${t('input')} ${formatEstimatedTokens(account.input_tokens)} · ${t('cache')} ${formatEstimatedTokens(account.cached_input_tokens)} · ${t('output')} ${formatEstimatedTokens(account.output_tokens)} · ${t('reasoning')} ${formatEstimatedTokens(account.reasoning_output_tokens)}` : `${account.requests} ${t('requests')} · ${t('input')} ${formatEstimatedTokens(account.input_tokens)} · ${t('output')} ${formatEstimatedTokens(account.output_tokens)}`;
         row.append(name, track, value, meta); users.appendChild(row);
       });
     }
     monitoring.textContent = '';
     [
-      [totals.monitoring_events, 'Audit events'], [totals.messages_sent, 'Messages sent'],
-      [totals.attachments_uploaded, 'Attachments'], [totals.conversations, 'Conversations']
+      [totals.monitoring_events, t('auditEvents')], [totals.messages_sent, t('messagesSent')],
+      [totals.attachments_uploaded, t('attachments')], [totals.conversations, t('conversations')]
     ].forEach(([value, label]) => {
       const item = document.createElement('div'); const number = document.createElement('span'); number.textContent = value;
       const caption = document.createElement('small'); caption.textContent = label; item.append(number, caption); monitoring.appendChild(item);
@@ -1356,7 +1356,7 @@ function setupOperationsDashboard(basePath, user) {
   };
   button.addEventListener('click', async () => {
     modal.hidden = false;
-    try { await loadDashboard(); } catch (err) { summary.textContent = ''; summary.appendChild(statCard('Dashboard unavailable', '—', err.message)); }
+    try { await loadDashboard(); } catch (err) { summary.textContent = ''; summary.appendChild(statCard(t('dashboardUnavailable'), '—', err.message)); }
   });
   document.getElementById('close-dashboard-modal').addEventListener('click', () => { modal.hidden = true; });
 }
@@ -1396,6 +1396,7 @@ function setupAccountManagement(basePath, user) {
  * Auth guard - check if login is required before showing chat
  */
 async function checkAuth() {
+  setupLanguageSwitcher();
   const loginScreen = document.getElementById('login-screen');
   const chatScreen = document.getElementById('chat-screen');
   const loginForm = document.getElementById('login-form');

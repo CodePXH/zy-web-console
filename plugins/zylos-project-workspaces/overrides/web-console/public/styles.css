@@ -130,6 +130,10 @@ header h1 {
   align-items: center;
   gap: 0.75rem;
 }
+.language-toggle { border: 1px solid var(--border-color); border-radius: .4rem; padding: .35rem .5rem; background: var(--bg-tertiary); color: var(--text-primary); font-size: .74rem; cursor: pointer; }
+.language-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.login-language-toggle { position: absolute; top: .8rem; right: .8rem; }
+.login-box { position: relative; }
 
 .model-info {
   display: flex;
@@ -589,10 +593,17 @@ header h1 {
   font-size: 1rem;
   font-family: inherit;
   resize: none;
+  /* Long drafts remain scrollable with the wheel, keyboard and touch, but
+     the native textarea rail is not part of the composer visual design. */
+  overflow-y: auto;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
   max-height: 150px;
   outline: none;
   transition: border-color 0.2s;
 }
+
+#message-input::-webkit-scrollbar { width: 0; height: 0; }
 
 #message-input:focus {
   border-color: var(--accent);
@@ -674,22 +685,26 @@ header h1 {
   font-size: 0.875rem;
 }
 
-/* Scrollbar styling */
+/* The conversation scrollbar should be discoverable, not visually compete
+   with the composer. Show a narrow accent thumb only while it is in use. */
 .messages::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 .messages::-webkit-scrollbar-track {
-  background: var(--bg-primary);
+  background: transparent;
 }
 
 .messages::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 4px;
+  background: transparent;
+  border-radius: 999px;
 }
 
+.messages { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.messages:hover { scrollbar-color: rgba(77, 217, 208, 0.48) transparent; }
+.messages:hover::-webkit-scrollbar-thumb { background: rgba(77, 217, 208, 0.38); }
 .messages::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
+  background: rgba(77, 217, 208, 0.72);
 }
 
 /* Login screen */

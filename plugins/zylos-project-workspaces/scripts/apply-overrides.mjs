@@ -21,10 +21,16 @@ const mappings = [
   ['web-console/scripts/db.js', path.join(skillsRoot, 'web-console/scripts/db.js')],
   ['comm-bridge/scripts/c4-dispatcher.js', path.join(skillsRoot, 'comm-bridge/scripts/c4-dispatcher.js')]
 ];
+// Files wholly owned by this plugin have no upstream baseline. They are copied
+// verbatim, unlike compatibility overlays which use a three-way merge.
+const ownedFiles = [
+  ['web-console/public/i18n.js', path.join(skillsRoot, 'web-console/public/i18n.js')]
+];
 const args = process.argv.slice(2);
 const mode = args.includes('--apply') ? 'apply' : 'check';
-if (args.some((arg) => !['--apply', '--check'].includes(arg))) {
-  console.error('Usage: apply-overrides.mjs [--check|--apply]');
+const migrateI18n = args.includes('--migrate-i18n');
+if (args.some((arg) => !['--apply', '--check', '--migrate-i18n'].includes(arg))) {
+  console.error('Usage: apply-overrides.mjs [--check|--apply] [--migrate-i18n]');
   process.exit(64);
 }
 const contents = (file) => fs.readFileSync(file, 'utf8');
@@ -46,6 +52,13 @@ for (const [relative, target] of mappings) {
     console.log(`applied  ${relative}`);
     continue;
   }
+  // One-time controlled migration from the short-lived inline localization
+  // experiment. Normal upgrade checks still use the three-way merge below.
+  if (migrateI18n) {
+    console.log(`migrating ${relative}`);
+    staged.push({ relative, target, text: customText });
+    continue;
+  }
   let merged;
   try {
     merged = execFileSync('git', ['merge-file', '-p', target, baseline, custom], { encoding: 'utf8' });
@@ -64,6 +77,22 @@ for (const [relative, target] of mappings) {
   }
 }
 
+for (const [relative, target] of ownedFiles) {
+  const custom = path.join(pluginRoot, 'overrides', relative);
+  if (!fs.existsSync(custom)) {
+    console.error(`Missing owned source for ${relative}`);
+    process.exit(2);
+  }
+  const customText = contents(custom);
+  const currentText = fs.existsSync(target) ? contents(target) : null;
+  if (currentText === customText) {
+    console.log(`applied  ${relative}`);
+  } else {
+    console.log(`${currentText === null ? 'missing  ' : 'pending  '} ${relative}`);
+    staged.push({ relative, target, text: customText });
+  }
+}
+
 if (conflicts) {
   console.error(`No files were changed: ${conflicts} merge conflict(s) require review.`);
   process.exit(1);
@@ -77,7 +106,8 @@ if (staged.length) {
   for (const { relative, target, text } of staged) {
     const backup = path.join(backupRoot, relative);
     fs.mkdirSync(path.dirname(backup), { recursive: true });
-    fs.copyFileSync(target, backup);
+    if (fs.existsSync(target)) fs.copyFileSync(target, backup);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, text);
   }
   console.log(`Applied ${staged.length} file(s). Backup: ${backupRoot}`);
