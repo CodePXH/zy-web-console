@@ -76,6 +76,10 @@ body {
 .usage-event-label { min-width: 0; color: var(--text-primary); }.usage-event-meta { color: var(--text-secondary); font-size: .76rem; text-align: right; }.usage-empty { color: var(--text-secondary); padding: .8rem 0; font-size: .85rem; }
 .audit-filter { display: flex; align-items: center; gap: .5rem; color: var(--text-secondary); font-size: .85rem; }.audit-filter select { min-width: 160px; padding: .4rem; border: 1px solid var(--border-color); border-radius: .35rem; color: var(--text-primary); background: var(--bg-tertiary); }
 .audit-user-summary { overflow-x: auto; margin-top: .8rem; }.audit-user-summary table { width: 100%; border-collapse: collapse; font-size: .8rem; }.audit-user-summary th, .audit-user-summary td { padding: .5rem; border-bottom: 1px solid var(--border-color); text-align: left; white-space: nowrap; }.audit-user-summary th { color: var(--text-secondary); font-weight: 600; }.audit-user-summary td:last-child { color: var(--text-secondary); }
+.audit-modal { height: min(80vh, 760px); overflow: hidden; display: flex; flex-direction: column; }
+.audit-modal .modal-header, .audit-modal .audit-filter, .audit-modal .usage-heading { flex: 0 0 auto; }
+.audit-modal .audit-user-summary { flex: 0 1 auto; max-height: 31vh; overflow: auto; }
+.audit-modal #audit-events { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: .35rem; }
 
 header {
   display: flex;
